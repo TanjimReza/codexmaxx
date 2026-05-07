@@ -9,6 +9,7 @@ CONFIGURATION="${CONFIGURATION:-release}"
 SIGN_IDENTITY="${CODE_SIGN_IDENTITY:--}"
 OUT_DIR="${OUT_DIR:-$PWD}"
 APP="$OUT_DIR/$APP_NAME.app"
+ENTITLEMENTS="$OUT_DIR/$APP_NAME.entitlements"
 
 swift build -c "$CONFIGURATION" --product "$APP_NAME"
 BIN_DIR="$(swift build -c "$CONFIGURATION" --product "$APP_NAME" --show-bin-path)"
@@ -17,6 +18,7 @@ rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources" "$APP/Contents/Frameworks"
 cp "$BIN_DIR/$APP_NAME" "$APP/Contents/MacOS/$APP_NAME"
 cp Icon.icns "$APP/Contents/Resources/$APP_NAME.icns"
+install_name_tool -add_rpath "@executable_path/../Frameworks" "$APP/Contents/MacOS/$APP_NAME" 2>/dev/null || true
 
 SPARKLE_FRAMEWORK="$BIN_DIR/Sparkle.framework"
 if [[ -d "$SPARKLE_FRAMEWORK" ]]; then
@@ -35,6 +37,10 @@ fi
   -c 'Add :LSMinimumSystemVersion string 14.0' \
   -c 'Add :LSUIElement bool true' \
   "$APP/Contents/Info.plist"
+
+/usr/libexec/PlistBuddy -c 'Clear dict' \
+  -c 'Add :com.apple.security.cs.disable-library-validation bool true' \
+  "$ENTITLEMENTS"
 
 if [[ -n "${SPARKLE_FEED_URL:-}" ]]; then
   /usr/libexec/PlistBuddy -c "Add :SUFeedURL string $SPARKLE_FEED_URL" "$APP/Contents/Info.plist"
@@ -65,12 +71,12 @@ if [[ -d "$APP/Contents/Frameworks/Sparkle.framework" ]]; then
   sign_path "$APP/Contents/Frameworks/Sparkle.framework"
 fi
 xattr -cr "$APP" 2>/dev/null || true
-if ! codesign --force --deep "$TIMESTAMP_FLAG" --options runtime --sign "$SIGN_IDENTITY" "$APP"; then
+if ! codesign --force --deep "$TIMESTAMP_FLAG" --options runtime --entitlements "$ENTITLEMENTS" --sign "$SIGN_IDENTITY" "$APP"; then
   if [[ "$SIGN_IDENTITY" == "-" ]]; then
     exit 1
   fi
   echo "Developer ID signing failed for $APP; falling back to ad-hoc signing." >&2
-  codesign --force --deep --timestamp=none --options runtime --sign - "$APP"
+  codesign --force --deep --timestamp=none --options runtime --entitlements "$ENTITLEMENTS" --sign - "$APP"
 fi
 
 echo "$APP"

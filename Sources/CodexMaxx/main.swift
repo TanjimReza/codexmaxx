@@ -389,12 +389,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         alert.informativeText = "Rename the profile and optional label."
         alert.addButton(withTitle: "Save")
         alert.addButton(withTitle: "Cancel")
-        let stack = NSStackView(frame: NSRect(x: 0, y: 0, width: 260, height: 54))
+        let stack = NSStackView(frame: NSRect(x: 0, y: 0, width: 320, height: 62))
         stack.orientation = .vertical
+        stack.spacing = 8
         let name = NSTextField(string: account.name)
         let label = NSTextField(string: account.label ?? "")
         name.placeholderString = "Name"
         label.placeholderString = "Label"
+        name.frame.size = NSSize(width: 320, height: 24)
+        label.frame.size = NSSize(width: 320, height: 24)
         stack.addArrangedSubview(name)
         stack.addArrangedSubview(label)
         alert.accessoryView = stack
@@ -411,9 +414,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         alert.informativeText = "This stores the currently active Codex credentials as a new CodexMaxx account."
         alert.addButton(withTitle: "Add")
         alert.addButton(withTitle: "Cancel")
+        let container = NSView(frame: NSRect(x: 0, y: 0, width: 320, height: 28))
         let field = NSTextField(string: "")
         field.placeholderString = "Account name"
-        alert.accessoryView = field
+        field.frame = NSRect(x: 0, y: 2, width: 320, height: 24)
+        container.addSubview(field)
+        alert.accessoryView = container
+        alert.window.initialFirstResponder = field
         guard alert.runModal() == .alertFirstButtonReturn else { return }
         Task {
             await self.controller.addCurrentAccount(named: field.stringValue)
