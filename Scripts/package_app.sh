@@ -53,6 +53,7 @@ xattr -cr "$APP" 2>/dev/null || true
 if [[ -d "$APP/Contents/Frameworks/Sparkle.framework" ]]; then
   codesign --force "$TIMESTAMP_FLAG" --options runtime --sign "$SIGN_IDENTITY" "$APP/Contents/Frameworks/Sparkle.framework"
 fi
+xattr -cr "$APP" 2>/dev/null || true
 codesign --force --deep "$TIMESTAMP_FLAG" --options runtime --sign "$SIGN_IDENTITY" "$APP"
 
 echo "$APP"
