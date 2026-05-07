@@ -2,6 +2,7 @@
 .swiftpm/
 DerivedData/
 CodexMaxx.app/
+CodexMaxx.entitlements
 *.zip
 *.zip.sha256
 *.sparkle-signature.txt
