@@ -32,6 +32,10 @@ CodexMaxx stores copied Codex profile files in `~/.codexmaxx/profiles/codex` and
 
 Do not commit `~/.codex`, `~/.codexmaxx`, `auth.json`, or local release credentials.
 
+## Credits
+
+CodexMaxx was inspired by [CodexBar](https://github.com/steipete/codexbar) by [@steipete](https://github.com/steipete) and account-switching ideas from [aisw](https://github.com/burakdede/aisw) by [Burak Dede](https://burakdede.com/).
+
 ## License
 
 MIT
