@@ -2,6 +2,8 @@
 
 Minimal macOS menu bar app for tracking and switching Codex accounts.
 
+<img src="docs/codexmaxx-menu.jpg" alt="CodexMaxx menu bar account usage popup" width="520">
+
 CodexMaxx reads local Codex OAuth credentials from your machine, fetches Codex usage windows, and lets you switch between stored Codex profiles from the menu bar.
 
 ## Features
