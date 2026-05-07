@@ -50,10 +50,27 @@ fi
 
 xattr -cr "$APP" 2>/dev/null || true
 
+sign_path() {
+  local target="$1"
+  if ! codesign --force "$TIMESTAMP_FLAG" --options runtime --sign "$SIGN_IDENTITY" "$target"; then
+    if [[ "$SIGN_IDENTITY" == "-" ]]; then
+      return 1
+    fi
+    echo "Developer ID signing failed for $target; falling back to ad-hoc signing." >&2
+    codesign --force --timestamp=none --options runtime --sign - "$target"
+  fi
+}
+
 if [[ -d "$APP/Contents/Frameworks/Sparkle.framework" ]]; then
-  codesign --force "$TIMESTAMP_FLAG" --options runtime --sign "$SIGN_IDENTITY" "$APP/Contents/Frameworks/Sparkle.framework"
+  sign_path "$APP/Contents/Frameworks/Sparkle.framework"
 fi
 xattr -cr "$APP" 2>/dev/null || true
-codesign --force --deep "$TIMESTAMP_FLAG" --options runtime --sign "$SIGN_IDENTITY" "$APP"
+if ! codesign --force --deep "$TIMESTAMP_FLAG" --options runtime --sign "$SIGN_IDENTITY" "$APP"; then
+  if [[ "$SIGN_IDENTITY" == "-" ]]; then
+    exit 1
+  fi
+  echo "Developer ID signing failed for $APP; falling back to ad-hoc signing." >&2
+  codesign --force --deep --timestamp=none --options runtime --sign - "$APP"
+fi
 
 echo "$APP"
