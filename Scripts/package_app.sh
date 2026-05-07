@@ -7,6 +7,8 @@ VERSION="${VERSION:-0.9.1}"
 BUILD_NUMBER="${BUILD_NUMBER:-${GITHUB_RUN_NUMBER:-1}}"
 CONFIGURATION="${CONFIGURATION:-release}"
 SIGN_IDENTITY="${CODE_SIGN_IDENTITY:--}"
+SPARKLE_FEED_URL="${SPARKLE_FEED_URL:-https://releaseflow.net/kitze/codexmaxx/sparkle/appcast.xml}"
+SPARKLE_PUBLIC_KEY="${SPARKLE_PUBLIC_KEY:-JrmuMZR2IMke8Tkm+znSxzRCzgmsvpLFT/9Bp5TRiEw=}"
 OUT_DIR="${OUT_DIR:-$PWD}"
 APP="$OUT_DIR/$APP_NAME.app"
 ENTITLEMENTS="$OUT_DIR/$APP_NAME.entitlements"
@@ -42,10 +44,10 @@ fi
   -c 'Add :com.apple.security.cs.disable-library-validation bool true' \
   "$ENTITLEMENTS"
 
-if [[ -n "${SPARKLE_FEED_URL:-}" ]]; then
+if [[ -n "$SPARKLE_FEED_URL" ]]; then
   /usr/libexec/PlistBuddy -c "Add :SUFeedURL string $SPARKLE_FEED_URL" "$APP/Contents/Info.plist"
 fi
-if [[ -n "${SPARKLE_PUBLIC_KEY:-}" ]]; then
+if [[ -n "$SPARKLE_PUBLIC_KEY" ]]; then
   /usr/libexec/PlistBuddy -c "Add :SUPublicEDKey string $SPARKLE_PUBLIC_KEY" "$APP/Contents/Info.plist"
 fi
 
