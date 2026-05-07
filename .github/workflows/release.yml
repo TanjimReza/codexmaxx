@@ -1,0 +1,47 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Version, for example 0.9.1"
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+jobs:
+  build-release:
+    runs-on: [self-hosted, macOS]
+    env:
+      VERSION: ${{ inputs.version || github.ref_name }}
+      BUNDLE_ID: dev.kitze.codexmaxx
+      CODE_SIGN_IDENTITY: ${{ secrets.CODE_SIGN_IDENTITY }}
+      SPARKLE_FEED_URL: ${{ secrets.SPARKLE_FEED_URL }}
+      SPARKLE_PUBLIC_KEY: ${{ secrets.SPARKLE_PUBLIC_KEY }}
+      SPARKLE_PRIVATE_KEY: ${{ secrets.SPARKLE_PRIVATE_KEY }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Normalize version
+        run: |
+          VERSION="${VERSION#v}"
+          echo "VERSION=$VERSION" >> "$GITHUB_ENV"
+      - name: Build app
+        run: ./Scripts/package_app.sh
+      - name: Zip app
+        run: ./Scripts/zip_app.sh CodexMaxx.app "CodexMaxx-$VERSION.zip"
+      - name: Sign Sparkle update
+        run: |
+          test -n "$SPARKLE_PRIVATE_KEY"
+          printf '%s' "$SPARKLE_PRIVATE_KEY" | .build/artifacts/sparkle/Sparkle/bin/sign_update --ed-key-file - "CodexMaxx-$VERSION.zip" > "CodexMaxx-$VERSION.sparkle-signature.txt"
+      - name: Upload GitHub release
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          TAG="v$VERSION"
+          gh release view "$TAG" >/dev/null 2>&1 || gh release create "$TAG" --title "CodexMaxx $VERSION" --notes "CodexMaxx $VERSION"
+          gh release upload "$TAG" "CodexMaxx-$VERSION.zip" "CodexMaxx-$VERSION.zip.sha256" "CodexMaxx-$VERSION.sparkle-signature.txt" --clobber

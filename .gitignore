@@ -1,0 +1,13 @@
+.build/
+.swiftpm/
+DerivedData/
+CodexMaxx.app/
+*.zip
+*.zip.sha256
+*.sparkle-signature.txt
+*.dSYM
+*.xcresult
+.DS_Store
+auth.json
+*.p8
+*.key
