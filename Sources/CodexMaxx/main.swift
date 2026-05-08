@@ -1078,6 +1078,7 @@ enum CodexProfileStore {
 
     static func loadProfiles() throws -> [CodexProfile] {
         let root = Self.codexProfilesRoot
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
         let config = (try? Self.loadConfig()) ?? CodexMaxxConfig.empty
         let active = Self.activeProfileName()
         let urls = try FileManager.default.contentsOfDirectory(
