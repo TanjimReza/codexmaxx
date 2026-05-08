@@ -309,7 +309,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             controller: self.controller,
             settings: self.settings,
             onSwitch: { [weak self] name in self?.switchAccount(named: name) },
-            onEdit: { [weak self] account in self?.editAccount(account) }))
+            onEdit: { [weak self] account in self?.editAccount(account) },
+            onDelete: { [weak self] account in self?.deleteAccount(account) }))
         menu.addItem(top)
         menu.addItem(.separator())
 
@@ -408,6 +409,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
+    private func deleteAccount(_ account: CodexAccountUsage) {
+        let alert = NSAlert()
+        alert.alertStyle = .warning
+        alert.messageText = "Delete Profile?"
+        alert.informativeText = "This removes '\(account.displayName)' from CodexMaxx. Your current ~/.codex files are not deleted."
+        alert.addButton(withTitle: "Delete")
+        alert.addButton(withTitle: "Cancel")
+        guard alert.runModal() == .alertFirstButtonReturn else { return }
+        Task {
+            await self.controller.deleteAccount(named: account.name)
+            self.render()
+        }
+    }
+
     @objc private func addCurrentAccount() {
         let alert = NSAlert()
         alert.messageText = "Add Current Account"
@@ -474,6 +489,7 @@ struct MenuContent: View {
     let settings: DisplaySettings
     let onSwitch: (String) -> Void
     let onEdit: (CodexAccountUsage) -> Void
+    let onDelete: (CodexAccountUsage) -> Void
 
     var body: some View {
         VStack(alignment: .leading, spacing: 7) {
@@ -508,7 +524,7 @@ struct MenuContent: View {
             Divider()
 
             ForEach(controller.accounts) { account in
-                AccountRow(account: account, settings: settings, onSwitch: onSwitch, onEdit: onEdit)
+                AccountRow(account: account, settings: settings, onSwitch: onSwitch, onEdit: onEdit, onDelete: onDelete)
                 if account.id != controller.accounts.last?.id {
                     Divider()
                 }
@@ -536,50 +552,73 @@ struct AccountRow: View {
     let settings: DisplaySettings
     let onSwitch: (String) -> Void
     let onEdit: (CodexAccountUsage) -> Void
+    let onDelete: (CodexAccountUsage) -> Void
 
     var body: some View {
         let wasted = account.isWasted
-        Button(action: { onSwitch(account.name) }) {
-            VStack(alignment: .leading, spacing: 5) {
-                HStack(spacing: 8) {
-                    if account.active {
-                        Image(systemName: "checkmark.circle.fill")
-                            .foregroundStyle(.green)
-                    } else {
-                        Image(systemName: wasted ? "clock" : "circle")
-                            .foregroundStyle(.secondary)
-                    }
-
-                    VStack(alignment: .leading, spacing: 1) {
-                        Text(account.displayName)
-                            .font(.subheadline.weight(.semibold))
-                        if settings.showEmails, !account.emailOrPlan.isEmpty {
-                            Text(account.emailOrPlan)
-                                .font(.caption2)
+        VStack(alignment: .leading, spacing: 5) {
+            HStack(spacing: 8) {
+                Button(action: { onSwitch(account.name) }) {
+                    HStack(spacing: 8) {
+                        if account.active {
+                            Image(systemName: "checkmark.circle.fill")
+                                .foregroundStyle(.green)
+                        } else {
+                            Image(systemName: wasted ? "clock" : "circle")
                                 .foregroundStyle(.secondary)
                         }
+
+                        VStack(alignment: .leading, spacing: 1) {
+                            Text(account.displayName)
+                                .font(.subheadline.weight(.semibold))
+                            if settings.showEmails, !account.emailOrPlan.isEmpty {
+                                Text(account.emailOrPlan)
+                                    .font(.caption2)
+                                    .foregroundStyle(.secondary)
+                            }
+                        }
                     }
-
-                    Spacer()
-
-                    Text(account.statusText)
-                        .font(.system(.caption, design: .monospaced))
-                        .foregroundStyle(wasted ? .secondary : .primary)
                 }
+                .buttonStyle(.plain)
 
-                if let snapshot = account.snapshot {
-                    UsageBars(snapshot: snapshot, dimmed: wasted, combined: false, settings: .popup, forceInline: true)
-                } else {
-                    Text(account.error ?? "No usage")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                        .fixedSize(horizontal: false, vertical: true)
+                Spacer()
+
+                Text(account.statusText)
+                    .font(.system(.caption, design: .monospaced))
+                    .foregroundStyle(wasted ? .secondary : .primary)
+
+                HStack(spacing: 4) {
+                    Button(action: { onEdit(account) }) {
+                        Image(systemName: "pencil")
+                            .frame(width: 18, height: 18)
+                    }
+                    .buttonStyle(.plain)
+                    .help("Edit profile")
+
+                    Button(action: { onDelete(account) }) {
+                        Image(systemName: "trash")
+                            .frame(width: 18, height: 18)
+                    }
+                    .buttonStyle(.plain)
+                    .foregroundStyle(.red)
+                    .help("Delete profile")
                 }
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            }
+
+            if let snapshot = account.snapshot {
+                UsageBars(snapshot: snapshot, dimmed: wasted, combined: false, settings: .popup, forceInline: true)
+            } else {
+                Text(account.error ?? "No usage")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
             }
         }
-        .buttonStyle(.plain)
         .contextMenu {
             Button("Edit Name/Label") { onEdit(account) }
+            Button("Delete Profile", role: .destructive) { onDelete(account) }
         }
         .opacity(wasted ? 0.45 : 1)
     }
@@ -742,6 +781,15 @@ final class UsageController {
             self.lastError = error.localizedDescription
         }
     }
+
+    func deleteAccount(named name: String) async {
+        do {
+            try CodexProfileStore.deleteProfile(named: name)
+            await self.refresh()
+        } catch {
+            self.lastError = error.localizedDescription
+        }
+    }
 }
 
 struct CodexProfile: Sendable {
@@ -867,6 +915,19 @@ enum CodexProfileStore {
         config.profiles[destination.lastPathComponent] = CodexMaxxProfile(
             addedAt: ISO8601DateFormatter().string(from: Date()),
             label: nil)
+        try Self.saveConfig(config)
+    }
+
+    static func deleteProfile(named name: String) throws {
+        let target = Self.codexProfilesRoot.appendingPathComponent(name)
+        guard FileManager.default.fileExists(atPath: target.path) else { return }
+        try FileManager.default.removeItem(at: target)
+
+        var config = (try? Self.loadConfig()) ?? CodexMaxxConfig.empty
+        config.profiles.removeValue(forKey: name)
+        if config.active == name {
+            config.active = nil
+        }
         try Self.saveConfig(config)
     }
 
