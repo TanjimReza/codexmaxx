@@ -16,6 +16,30 @@ CodexMaxx reads local Codex OAuth credentials from your machine, fetches Codex u
 - Text, stacked-bar, and circular menu bar display modes.
 - Local profile storage under `~/.codexmaxx`.
 
+## Add Multiple Accounts
+
+CodexMaxx saves whatever account is currently active in the Codex CLI. To add multiple accounts, use `codex login` for each account and then save it from the CodexMaxx menu.
+
+1. Log in to the first account with the Codex CLI:
+
+   ```bash
+   codex login
+   ```
+
+2. Open CodexMaxx and choose `Add Current Account...`. Give the profile a clear name, such as `work` or `personal`.
+
+3. Log in to the next account with the Codex CLI:
+
+   ```bash
+   codex login
+   ```
+
+4. Choose `Add Current Account...` again and save this account under a different profile name.
+
+Repeat the same flow for every account you want to manage. You do not need to run a logout command first; use `codex login` to replace the currently active CLI credentials, then save that active account in CodexMaxx.
+
+After the accounts are saved, switch between them from the CodexMaxx menu. Switching copies the selected saved profile into `~/.codex`, so the Codex CLI and CodexMaxx use the same active account.
+
 ## Build
 
 ```bash
