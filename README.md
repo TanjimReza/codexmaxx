@@ -11,9 +11,11 @@ CodexMaxx reads local Codex OAuth credentials from your machine, fetches Codex u
 - Combined or active-account menu bar usage.
 - Session and weekly Codex quota display.
 - Account switching without a CLI.
+- Optional Codex-only load balancing across stored profiles.
 - Optional email hiding for privacy.
 - Text, stacked-bar, and circular menu bar display modes.
 - Local profile storage under `~/.codexmaxx`.
+- Separate Dev variant storage under `~/.codexmaxx-dev`.
 
 ## Build
 

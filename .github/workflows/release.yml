@@ -6,9 +6,17 @@ on:
       - "v*"
   workflow_dispatch:
     inputs:
-      version:
-        description: "Version, for example 0.9.1"
+      variant:
+        description: "Build variant"
         required: true
+        default: dev
+        type: choice
+        options:
+          - dev
+          - stable
+      version:
+        description: "Version, for example 0.9.1. Dev defaults to 0.9.1-dev.<run>."
+        required: false
         type: string
 
 permissions:
@@ -16,33 +24,78 @@ permissions:
 
 jobs:
   build-release:
-    runs-on: [self-hosted, macOS]
+    runs-on: [self-hosted, macOS, ARM64]
     env:
-      VERSION: ${{ inputs.version || github.ref_name }}
-      BUNDLE_ID: dev.kitze.codexmaxx
       CODE_SIGN_IDENTITY: ${{ secrets.CODE_SIGN_IDENTITY }}
       SPARKLE_FEED_URL: ${{ secrets.SPARKLE_FEED_URL }}
       SPARKLE_PUBLIC_KEY: ${{ secrets.SPARKLE_PUBLIC_KEY }}
       SPARKLE_PRIVATE_KEY: ${{ secrets.SPARKLE_PRIVATE_KEY }}
     steps:
       - uses: actions/checkout@v6
-      - name: Normalize version
+      - name: Resolve variant
         run: |
-          VERSION="${VERSION#v}"
+          VARIANT="${{ github.event.inputs.variant || 'stable' }}"
+          VERSION_INPUT="${{ github.event.inputs.version || '' }}"
+          if [[ "$GITHUB_EVENT_NAME" != "workflow_dispatch" ]]; then
+            VARIANT="stable"
+          fi
+
+          if [[ "$VARIANT" == "dev" ]]; then
+            VERSION="${VERSION_INPUT#v}"
+            if [[ -z "$VERSION" ]]; then
+              VERSION="0.9.1-dev.${GITHUB_RUN_NUMBER}"
+            fi
+            echo "APP_NAME=CodexMaxx Dev" >> "$GITHUB_ENV"
+            echo "BUNDLE_ID=dev.kitze.codexmaxx.dev" >> "$GITHUB_ENV"
+            echo "ZIP_NAME=CodexMaxx-Dev.zip" >> "$GITHUB_ENV"
+            echo "SPARKLE_FEED_URL=" >> "$GITHUB_ENV"
+            echo "SPARKLE_PUBLIC_KEY=" >> "$GITHUB_ENV"
+          else
+            VERSION="${VERSION_INPUT:-${GITHUB_REF_NAME#v}}"
+            VERSION="${VERSION#v}"
+            if [[ -z "$VERSION" || "$VERSION" == "$GITHUB_REF_NAME" ]]; then
+              echo "Stable releases need a version or v* tag" >&2
+              exit 1
+            fi
+            echo "APP_NAME=CodexMaxx" >> "$GITHUB_ENV"
+            echo "BUNDLE_ID=dev.kitze.codexmaxx" >> "$GITHUB_ENV"
+            echo "ZIP_NAME=CodexMaxx.zip" >> "$GITHUB_ENV"
+          fi
+
+          echo "VARIANT=$VARIANT" >> "$GITHUB_ENV"
           echo "VERSION=$VERSION" >> "$GITHUB_ENV"
       - name: Build app
-        run: ./Scripts/package_app.sh
+        run: |
+          APP_NAME="$APP_NAME" \
+          BUNDLE_ID="$BUNDLE_ID" \
+          VERSION="$VERSION" \
+          BUILD_NUMBER="$GITHUB_RUN_NUMBER" \
+          SPARKLE_FEED_URL="$SPARKLE_FEED_URL" \
+          SPARKLE_PUBLIC_KEY="$SPARKLE_PUBLIC_KEY" \
+          ./Scripts/package_app.sh
       - name: Zip app
-        run: ./Scripts/zip_app.sh CodexMaxx.app CodexMaxx.zip
+        run: ./Scripts/zip_app.sh "$APP_NAME.app" "$ZIP_NAME"
+      - name: Verify signature
+        run: codesign --verify --deep --strict --verbose=2 "$APP_NAME.app"
+      - name: Upload Dev artifact
+        if: ${{ github.event_name == 'workflow_dispatch' && inputs.variant == 'dev' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: CodexMaxx-Dev-${{ github.run_number }}
+          path: |
+            ${{ env.ZIP_NAME }}
+            ${{ env.ZIP_NAME }}.sha256
       - name: Sign Sparkle update
+        if: ${{ github.event_name != 'workflow_dispatch' || inputs.variant == 'stable' }}
         run: |
           test -n "$SPARKLE_PRIVATE_KEY"
-          printf '%s' "$SPARKLE_PRIVATE_KEY" | .build/artifacts/sparkle/Sparkle/bin/sign_update --ed-key-file - -p CodexMaxx.zip > CodexMaxx.zip.sig
+          printf '%s' "$SPARKLE_PRIVATE_KEY" | .build/artifacts/sparkle/Sparkle/bin/sign_update --ed-key-file - -p "$ZIP_NAME" > "$ZIP_NAME.sig"
       - name: Upload GitHub release
+        if: ${{ github.event_name != 'workflow_dispatch' || inputs.variant == 'stable' }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           TAG="v$VERSION"
           gh release view "$TAG" >/dev/null 2>&1 || gh release create "$TAG" --title "CodexMaxx $VERSION" --notes "CodexMaxx $VERSION"
           gh release edit "$TAG" --notes "CodexMaxx $VERSION"
-          gh release upload "$TAG" CodexMaxx.zip CodexMaxx.zip.sha256 CodexMaxx.zip.sig --clobber
+          gh release upload "$TAG" "$ZIP_NAME" "$ZIP_NAME.sha256" "$ZIP_NAME.sig" --clobber

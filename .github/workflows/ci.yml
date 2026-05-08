@@ -7,12 +7,27 @@ on:
 
 jobs:
   build:
-    runs-on: [self-hosted, macOS]
+    runs-on: [self-hosted, macOS, ARM64]
+    strategy:
+      fail-fast: false
+      matrix:
+        variant: [stable, dev]
     steps:
       - uses: actions/checkout@v6
       - name: Toolchain
         run: |
           swift --version
           xcodebuild -version || true
-      - name: Build
-        run: swift build -c release --product CodexMaxx
+      - name: Build ${{ matrix.variant }}
+        run: |
+          if [[ "${{ matrix.variant }}" == "dev" ]]; then
+            APP_NAME="CodexMaxx Dev" \
+            BUNDLE_ID="dev.kitze.codexmaxx.dev" \
+            SPARKLE_FEED_URL="" \
+            SPARKLE_PUBLIC_KEY="" \
+            ./Scripts/package_app.sh
+            codesign --verify --deep --strict --verbose=2 "CodexMaxx Dev.app"
+          else
+            ./Scripts/package_app.sh
+            codesign --verify --deep --strict --verbose=2 CodexMaxx.app
+          fi

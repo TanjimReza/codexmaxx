@@ -26,9 +26,46 @@ enum BarLayout: String, Sendable {
     case circles
 }
 
+enum LoadBalancerStrategy: String, Codable, CaseIterable, Sendable {
+    case capacityWeighted = "capacity_weighted"
+    case usageWeighted = "usage_weighted"
+    case roundRobin = "round_robin"
+
+    var title: String {
+        switch self {
+        case .capacityWeighted:
+            return "Capacity Weighted"
+        case .usageWeighted:
+            return "Usage Weighted"
+        case .roundRobin:
+            return "Round Robin"
+        }
+    }
+}
+
 enum UsageWindowKind: Hashable, Sendable {
     case session
     case week
+}
+
+struct LoadBalancerSettings: Codable, Sendable {
+    var enabled: Bool
+    var autoSwitchWhenWasted: Bool
+    var strategy: LoadBalancerStrategy
+    var preferEarlierReset: Bool
+
+    static let disabled = LoadBalancerSettings(
+        enabled: false,
+        autoSwitchWhenWasted: true,
+        strategy: .capacityWeighted,
+        preferEarlierReset: true)
+
+    enum CodingKeys: String, CodingKey {
+        case enabled
+        case autoSwitchWhenWasted = "auto_switch_when_wasted"
+        case strategy
+        case preferEarlierReset = "prefer_earlier_reset"
+    }
 }
 
 struct DisplaySettings: Sendable {
@@ -246,6 +283,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private let statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
     private let controller = UsageController()
     private var settings = DisplaySettings.load()
+    private var loadBalancerSettings = CodexProfileStore.loadLoadBalancerSettings()
     private lazy var updaterController = SPUStandardUpdaterController(
         startingUpdater: true,
         updaterDelegate: nil,
@@ -255,13 +293,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         self.statusItem.button?.title = "..."
         self.statusItem.button?.font = .monospacedDigitSystemFont(ofSize: 12, weight: .medium)
         self.statusItem.menu = self.makeMenu()
-        Task { await self.controller.refresh(); self.render() }
+        Task { await self.refreshAndRender() }
         Timer.scheduledTimer(withTimeInterval: 120, repeats: true) { [weak self] _ in
             Task { @MainActor in
-                await self?.controller.refresh()
-                self?.render()
+                await self?.refreshAndRender()
             }
         }
+    }
+
+    private func refreshAndRender() async {
+        await self.controller.refresh()
+        await self.controller.autoBalanceIfNeeded(settings: self.loadBalancerSettings)
+        self.render()
     }
 
     private func render() {
@@ -321,6 +364,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         add.target = self
         menu.addItem(add)
 
+        let balance = NSMenuItem(title: "Balance Now", action: #selector(balanceNow), keyEquivalent: "b")
+        balance.target = self
+        balance.isEnabled = self.loadBalancerSettings.enabled
+        menu.addItem(balance)
+
         let settingsItem = NSMenuItem(title: "Settings", action: nil, keyEquivalent: "")
         settingsItem.submenu = self.makeSettingsMenu()
         menu.addItem(settingsItem)
@@ -354,6 +402,30 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         menu.addItem(.separator())
         self.addSetting(menu, "Numbers", self.settings.showNumbers, #selector(toggleNumbers))
         self.addSetting(menu, "Show Emails", self.settings.showEmails, #selector(toggleEmails))
+        menu.addItem(.separator())
+        self.addSetting(menu, "Load Balancer", self.loadBalancerSettings.enabled, #selector(toggleLoadBalancer))
+        self.addSetting(
+            menu,
+            "Auto Switch When Wasted",
+            self.loadBalancerSettings.autoSwitchWhenWasted,
+            #selector(toggleLoadBalancerAutoSwitch))
+        self.addSetting(
+            menu,
+            "Prefer Earlier Weekly Reset",
+            self.loadBalancerSettings.preferEarlierReset,
+            #selector(togglePreferEarlierReset))
+
+        let strategyItem = NSMenuItem(title: "Load Balancer Strategy", action: nil, keyEquivalent: "")
+        let strategyMenu = NSMenu()
+        for strategy in LoadBalancerStrategy.allCases {
+            let item = NSMenuItem(title: strategy.title, action: #selector(setLoadBalancerStrategy), keyEquivalent: "")
+            item.target = self
+            item.representedObject = strategy.rawValue
+            item.state = self.loadBalancerSettings.strategy == strategy ? .on : .off
+            strategyMenu.addItem(item)
+        }
+        strategyItem.submenu = strategyMenu
+        menu.addItem(strategyItem)
         return menu
     }
 
@@ -365,10 +437,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     @objc private func refreshNow() {
-        Task {
-            await self.controller.refresh()
-            self.render()
-        }
+        Task { await self.refreshAndRender() }
     }
 
     @objc private func switchAccount(_ sender: NSMenuItem) {
@@ -379,6 +448,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private func switchAccount(named name: String) {
         Task {
             await self.controller.switchToAccount(named: name)
+            self.render()
+        }
+    }
+
+    @objc private func balanceNow() {
+        Task {
+            await self.controller.balanceNow(settings: self.loadBalancerSettings)
             self.render()
         }
     }
@@ -441,6 +517,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     @objc private func useCircleBarsIcon() { self.updateSettings { $0.layout = .circles } }
     @objc private func toggleNumbers() { self.updateSettings { $0.showNumbers.toggle() } }
     @objc private func toggleEmails() { self.updateSettings { $0.showEmails.toggle() } }
+    @objc private func toggleLoadBalancer() { self.updateLoadBalancerSettings { $0.enabled.toggle() } }
+    @objc private func toggleLoadBalancerAutoSwitch() { self.updateLoadBalancerSettings { $0.autoSwitchWhenWasted.toggle() } }
+    @objc private func togglePreferEarlierReset() { self.updateLoadBalancerSettings { $0.preferEarlierReset.toggle() } }
+
+    @objc private func setLoadBalancerStrategy(_ sender: NSMenuItem) {
+        guard let raw = sender.representedObject as? String,
+              let strategy = LoadBalancerStrategy(rawValue: raw) else { return }
+        self.updateLoadBalancerSettings { $0.strategy = strategy }
+    }
 
     @objc private func checkForUpdates() {
         self.updaterController.checkForUpdates(nil)
@@ -450,6 +535,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         mutate(&self.settings)
         self.settings.save()
         self.render()
+    }
+
+    private func updateLoadBalancerSettings(_ mutate: (inout LoadBalancerSettings) -> Void) {
+        mutate(&self.loadBalancerSettings)
+        do {
+            try CodexProfileStore.saveLoadBalancerSettings(self.loadBalancerSettings)
+            self.controller.setError(nil)
+        } catch {
+            self.controller.setError(error.localizedDescription)
+        }
+        Task {
+            await self.controller.autoBalanceIfNeeded(settings: self.loadBalancerSettings)
+            self.render()
+        }
     }
 
     @objc private func quit() {
@@ -722,6 +821,37 @@ final class UsageController {
         }
     }
 
+    func balanceNow(settings: LoadBalancerSettings) async {
+        do {
+            guard let selected = CodexLoadBalancer.selectAccount(from: self.accounts, settings: settings) else {
+                throw NSError(domain: "CodexMaxx", code: 20, userInfo: [
+                    NSLocalizedDescriptionKey: "No available Codex account to balance to",
+                ])
+            }
+            guard selected.name != self.accounts.first(where: \.active)?.name else {
+                self.lastError = nil
+                return
+            }
+            try CodexProfileStore.switchToProfile(named: selected.name)
+            await self.refresh()
+        } catch {
+            self.lastError = error.localizedDescription
+        }
+    }
+
+    func autoBalanceIfNeeded(settings: LoadBalancerSettings) async {
+        guard settings.enabled, settings.autoSwitchWhenWasted else { return }
+        guard self.accounts.first(where: \.active)?.isLoadBalancerAvailable != true else { return }
+        guard let selected = CodexLoadBalancer.selectAccount(from: self.accounts, settings: settings) else { return }
+        guard selected.name != self.accounts.first(where: \.active)?.name else { return }
+        do {
+            try CodexProfileStore.switchToProfile(named: selected.name)
+            await self.refresh()
+        } catch {
+            self.lastError = error.localizedDescription
+        }
+    }
+
     func editAccount(oldName: String, newName: String, label: String) async {
         do {
             try CodexProfileStore.editProfile(
@@ -742,6 +872,10 @@ final class UsageController {
             self.lastError = error.localizedDescription
         }
     }
+
+    func setError(_ message: String?) {
+        self.lastError = message
+    }
 }
 
 struct CodexProfile: Sendable {
@@ -749,6 +883,7 @@ struct CodexProfile: Sendable {
     let label: String?
     let homeURL: URL
     let active: Bool
+    let lastSelectedAt: Double?
 }
 
 struct CodexAccountUsage: Identifiable, Sendable {
@@ -756,6 +891,7 @@ struct CodexAccountUsage: Identifiable, Sendable {
     let name: String
     let label: String?
     let active: Bool
+    let lastSelectedAt: Double?
     let snapshot: UsageSnapshot?
     let error: String?
 
@@ -776,6 +912,11 @@ struct CodexAccountUsage: Identifiable, Sendable {
         return windows.contains { $0.remainingPercent <= 0.5 }
     }
 
+    var isLoadBalancerAvailable: Bool {
+        guard self.snapshot != nil else { return false }
+        return !self.isWasted
+    }
+
     var statusText: String {
         guard let snapshot else { return "offline" }
         if self.isWasted {
@@ -785,14 +926,142 @@ struct CodexAccountUsage: Identifiable, Sendable {
     }
 }
 
+enum CodexLoadBalancer {
+    private static let secondsPerDay = 86_400.0
+    private static let unknownResetBucketDays = 10_000
+    private static let secondaryCapacityCredits: [String: Double] = [
+        "free": 1_134.0,
+        "plus": 7_560.0,
+        "business": 7_560.0,
+        "team": 7_560.0,
+        "edu": 7_560.0,
+        "pro": 50_400.0,
+        "enterprise": 50_400.0,
+    ]
+    private static let planAliases = [
+        "education": "edu",
+        "k12": "edu",
+        "guest": "free",
+        "go": "free",
+        "free_workspace": "free",
+        "quorum": "free",
+        "unknown": "free",
+    ]
+
+    static func selectAccount(
+        from accounts: [CodexAccountUsage],
+        settings: LoadBalancerSettings,
+        now: Date = Date())
+        -> CodexAccountUsage?
+    {
+        var candidates = accounts.filter(\.isLoadBalancerAvailable)
+        guard !candidates.isEmpty else { return nil }
+
+        if settings.preferEarlierReset {
+            let earliest = candidates.map { self.resetBucketDays($0, now: now) }.min() ?? self.unknownResetBucketDays
+            candidates = candidates.filter { self.resetBucketDays($0, now: now) == earliest }
+        }
+
+        switch settings.strategy {
+        case .capacityWeighted:
+            return self.selectCapacityWeighted(candidates)
+        case .roundRobin:
+            return candidates.min(by: self.roundRobinComesBefore)
+        case .usageWeighted:
+            return candidates.min(by: self.usageComesBefore)
+        }
+    }
+
+    private static func selectCapacityWeighted(_ accounts: [CodexAccountUsage]) -> CodexAccountUsage? {
+        let weighted = accounts.map { account in
+            (account, self.remainingSecondaryCredits(account))
+        }
+        let total = weighted.map(\.1).reduce(0, +)
+        guard total > 0 else {
+            return accounts.min(by: self.usageComesBefore)
+        }
+
+        var cursor = Double.random(in: 0..<total)
+        for (account, weight) in weighted {
+            cursor -= weight
+            if cursor <= 0 {
+                return account
+            }
+        }
+        return accounts.last
+    }
+
+    private static func remainingSecondaryCredits(_ account: CodexAccountUsage) -> Double {
+        let capacity = self.secondaryCapacityCredits(for: account)
+        guard capacity > 0 else { return 0 }
+        let used = account.snapshot?.secondary?.usedPercent
+            ?? account.snapshot?.primary?.usedPercent
+            ?? 0
+        return max(0, capacity * (1 - min(100, used) / 100))
+    }
+
+    private static func secondaryCapacityCredits(for account: CodexAccountUsage) -> Double {
+        let raw = account.snapshot?.identity?.loginMethod
+        let normalized = self.normalizePlan(raw)
+        let resolved = self.planAliases[normalized] ?? normalized
+        return self.secondaryCapacityCredits[resolved] ?? self.secondaryCapacityCredits["free"]!
+    }
+
+    private static func normalizePlan(_ plan: String?) -> String {
+        let normalized = (plan ?? "")
+            .lowercased()
+            .replacingOccurrences(of: "-", with: "_")
+            .replacingOccurrences(of: " ", with: "_")
+        if normalized.contains("enterprise") { return "enterprise" }
+        if normalized.contains("business") { return "business" }
+        if normalized.contains("team") { return "team" }
+        if normalized.contains("edu") || normalized.contains("education") { return "edu" }
+        if normalized.contains("pro") { return "pro" }
+        if normalized.contains("plus") { return "plus" }
+        if normalized.contains("free") { return "free" }
+        return normalized.isEmpty ? "free" : normalized
+    }
+
+    private static func resetBucketDays(_ account: CodexAccountUsage, now: Date) -> Int {
+        guard let reset = account.snapshot?.secondary?.resetsAt else {
+            return self.unknownResetBucketDays
+        }
+        return max(0, Int(reset.timeIntervalSince(now) / self.secondsPerDay))
+    }
+
+    private static func usageComesBefore(_ lhs: CodexAccountUsage, _ rhs: CodexAccountUsage) -> Bool {
+        let lhsSecondary = lhs.snapshot?.secondary?.usedPercent ?? lhs.snapshot?.primary?.usedPercent ?? 0
+        let rhsSecondary = rhs.snapshot?.secondary?.usedPercent ?? rhs.snapshot?.primary?.usedPercent ?? 0
+        if lhsSecondary != rhsSecondary { return lhsSecondary < rhsSecondary }
+
+        let lhsPrimary = lhs.snapshot?.primary?.usedPercent ?? 0
+        let rhsPrimary = rhs.snapshot?.primary?.usedPercent ?? 0
+        if lhsPrimary != rhsPrimary { return lhsPrimary < rhsPrimary }
+
+        return self.roundRobinComesBefore(lhs, rhs)
+    }
+
+    private static func roundRobinComesBefore(_ lhs: CodexAccountUsage, _ rhs: CodexAccountUsage) -> Bool {
+        let lhsSelected = lhs.lastSelectedAt ?? 0
+        let rhsSelected = rhs.lastSelectedAt ?? 0
+        if lhsSelected != rhsSelected { return lhsSelected < rhsSelected }
+        return lhs.name.localizedStandardCompare(rhs.name) == .orderedAscending
+    }
+}
+
 enum CodexProfileStore {
-    private static let managedRoot = FileManager.default.homeDirectoryForCurrentUser
-        .appendingPathComponent(".codexmaxx")
-    private static let codexProfilesRoot = managedRoot.appendingPathComponent("profiles/codex")
+    private static var managedRoot: URL {
+        FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent(Self.isDevVariant ? ".codexmaxx-dev" : ".codexmaxx")
+    }
+    private static var codexProfilesRoot: URL {
+        Self.managedRoot.appendingPathComponent("profiles/codex")
+    }
     private static let liveCodexHome = FileManager.default.homeDirectoryForCurrentUser
         .appendingPathComponent(".codex")
-    private static let backupRoot = FileManager.default.homeDirectoryForCurrentUser
-        .appendingPathComponent(".codexmaxx/backups")
+    private static var backupRoot: URL {
+        Self.managedRoot.appendingPathComponent("backups")
+    }
     private static let switchedFiles = [
         "auth.json",
         "config.toml",
@@ -800,6 +1069,12 @@ enum CodexProfileStore {
         "installation_id",
         "version.json",
     ]
+
+    private static var isDevVariant: Bool {
+        let bundleId = Bundle.main.bundleIdentifier ?? ""
+        let displayName = Bundle.main.object(forInfoDictionaryKey: "CFBundleDisplayName") as? String
+        return bundleId.hasSuffix(".dev") || displayName == "CodexMaxx Dev"
+    }
 
     static func loadProfiles() throws -> [CodexProfile] {
         let root = Self.codexProfilesRoot
@@ -814,7 +1089,12 @@ enum CodexProfileStore {
             guard (try? url.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) == true else { return nil }
             guard FileManager.default.fileExists(atPath: url.appendingPathComponent("auth.json").path) else { return nil }
             let name = url.lastPathComponent
-            return CodexProfile(name: name, label: config.profiles[name]?.label, homeURL: url, active: name == active)
+            return CodexProfile(
+                name: name,
+                label: config.profiles[name]?.label,
+                homeURL: url,
+                active: name == active,
+                lastSelectedAt: config.profiles[name]?.lastSelectedAt)
         }
     }
 
@@ -834,7 +1114,7 @@ enum CodexProfileStore {
 
         try Self.backupLiveCodexHome()
         try Self.copySwitchedFiles(from: targetHome, to: Self.liveCodexHome)
-        try Self.updateActiveProfileName(name)
+        try Self.recordActiveProfileName(name)
     }
 
     static func editProfile(oldName: String, newName: String, label: String) throws {
@@ -852,7 +1132,8 @@ enum CodexProfileStore {
         let previous = config.profiles.removeValue(forKey: oldName)
         config.profiles[finalName] = CodexMaxxProfile(
             addedAt: previous?.addedAt ?? ISO8601DateFormatter().string(from: Date()),
-            label: label.isEmpty ? nil : label)
+            label: label.isEmpty ? nil : label,
+            lastSelectedAt: previous?.lastSelectedAt)
         if config.active == oldName {
             config.active = finalName
         }
@@ -866,7 +1147,18 @@ enum CodexProfileStore {
         var config = (try? Self.loadConfig()) ?? CodexMaxxConfig.empty
         config.profiles[destination.lastPathComponent] = CodexMaxxProfile(
             addedAt: ISO8601DateFormatter().string(from: Date()),
-            label: nil)
+            label: nil,
+            lastSelectedAt: nil)
+        try Self.saveConfig(config)
+    }
+
+    static func loadLoadBalancerSettings() -> LoadBalancerSettings {
+        ((try? Self.loadConfig()) ?? CodexMaxxConfig.empty).loadBalancer
+    }
+
+    static func saveLoadBalancerSettings(_ settings: LoadBalancerSettings) throws {
+        var config = (try? Self.loadConfig()) ?? CodexMaxxConfig.empty
+        config.loadBalancer = settings
         try Self.saveConfig(config)
     }
 
@@ -897,9 +1189,15 @@ enum CodexProfileStore {
         return config.active
     }
 
-    private static func updateActiveProfileName(_ name: String) throws {
+    private static func recordActiveProfileName(_ name: String) throws {
         var config = (try? Self.loadConfig()) ?? CodexMaxxConfig.empty
         config.active = name
+        var profile = config.profiles[name] ?? CodexMaxxProfile(
+            addedAt: ISO8601DateFormatter().string(from: Date()),
+            label: nil,
+            lastSelectedAt: nil)
+        profile.lastSelectedAt = Date().timeIntervalSince1970
+        config.profiles[name] = profile
         try Self.saveConfig(config)
     }
 
@@ -938,17 +1236,47 @@ struct CodexMaxxConfig: Codable, Sendable {
     var version: Int
     var active: String?
     var profiles: [String: CodexMaxxProfile]
+    var loadBalancer: LoadBalancerSettings
 
-    static let empty = CodexMaxxConfig(version: 1, active: nil, profiles: [:])
+    static let empty = CodexMaxxConfig(version: 1, active: nil, profiles: [:], loadBalancer: .disabled)
+
+    enum CodingKeys: String, CodingKey {
+        case version
+        case active
+        case profiles
+        case loadBalancer = "load_balancer"
+    }
+
+    init(
+        version: Int,
+        active: String?,
+        profiles: [String: CodexMaxxProfile],
+        loadBalancer: LoadBalancerSettings = .disabled)
+    {
+        self.version = version
+        self.active = active
+        self.profiles = profiles
+        self.loadBalancer = loadBalancer
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        self.version = try container.decodeIfPresent(Int.self, forKey: .version) ?? 1
+        self.active = try container.decodeIfPresent(String.self, forKey: .active)
+        self.profiles = try container.decodeIfPresent([String: CodexMaxxProfile].self, forKey: .profiles) ?? [:]
+        self.loadBalancer = try container.decodeIfPresent(LoadBalancerSettings.self, forKey: .loadBalancer) ?? .disabled
+    }
 }
 
 struct CodexMaxxProfile: Codable, Sendable {
     var addedAt: String?
     var label: String?
+    var lastSelectedAt: Double? = nil
 
     enum CodingKeys: String, CodingKey {
         case addedAt = "added_at"
         case label
+        case lastSelectedAt = "last_selected_at"
     }
 }
 
@@ -980,6 +1308,7 @@ enum CodexUsageLoader {
                 name: profile.name,
                 label: profile.label,
                 active: profile.active,
+                lastSelectedAt: profile.lastSelectedAt,
                 snapshot: snapshot,
                 error: snapshot == nil ? "No rate limits returned" : nil)
         } catch {
@@ -987,6 +1316,7 @@ enum CodexUsageLoader {
                 name: profile.name,
                 label: profile.label,
                 active: profile.active,
+                lastSelectedAt: profile.lastSelectedAt,
                 snapshot: nil,
                 error: error.localizedDescription)
         }
