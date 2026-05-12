@@ -557,8 +557,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             let window = NSWindow(contentViewController: host)
             window.title = AppInfo.displayName
             window.styleMask = [.titled, .closable, .miniaturizable, .resizable]
-            window.setContentSize(NSSize(width: 760, height: 560))
-            window.minSize = NSSize(width: 640, height: 440)
+            window.setContentSize(NSSize(width: 800, height: 600))
+            window.minSize = NSSize(width: 760, height: 500)
             window.center()
             self.mainWindowHost = host
             self.mainWindowController = NSWindowController(window: window)
@@ -827,13 +827,14 @@ struct MainWindowContent: View {
                     Label("Settings", systemImage: "gearshape")
                 }
             }
-            .padding(.horizontal, 20)
+            .padding(.horizontal, 24)
             .padding(.vertical, 16)
+            .background(Color(nsColor: .windowBackgroundColor))
 
             Divider()
 
             ScrollView {
-                VStack(alignment: .leading, spacing: 16) {
+                VStack(alignment: .leading, spacing: 24) {
                     if let error = controller.lastError {
                         Text(error)
                             .font(.callout)
@@ -841,24 +842,32 @@ struct MainWindowContent: View {
                             .frame(maxWidth: .infinity, alignment: .leading)
                     }
 
-                    HStack(alignment: .top, spacing: 14) {
-                        SummaryPanel(title: "Accounts", value: "\(controller.accounts.count)", detail: self.activeAccountName)
-                        SummaryPanel(title: "Load Balancer", value: loadBalancerSettings.enabled ? "On" : "Off", detail: loadBalancerSettings.strategy.title)
-                        if let combined = UsageMath.combined(controller.accounts.map(\.snapshot)) {
-                            SummaryUsagePanel(snapshot: combined)
+                    // Dashboard Widgets
+                    VStack(spacing: 16) {
+                        HStack(alignment: .top, spacing: 16) {
+                            SummaryPanel(title: "Accounts", value: "\(controller.accounts.count)", detail: self.activeAccountName)
+                            SummaryPanel(title: "Load Balancer", value: loadBalancerSettings.enabled ? "On" : "Off", detail: loadBalancerSettings.strategy.title)
+                            if let combined = UsageMath.combined(controller.accounts.map(\.snapshot)) {
+                                SummaryUsagePanel(snapshot: combined)
+                            }
+                        }
+
+                        HStack(alignment: .top, spacing: 16) {
+                            WeeklyUsageWidget(accounts: controller.accounts, samples: controller.usageHistory)
+                            ActivityGraphWidget(accounts: controller.accounts, samples: controller.usageHistory)
                         }
                     }
 
                     if controller.accounts.isEmpty {
                         EmptyAccountsPanel()
                     } else {
-                        VStack(alignment: .leading, spacing: 10) {
+                        VStack(alignment: .leading, spacing: 12) {
                             Text("Accounts")
                                 .font(.headline)
                             LazyVGrid(
-                                columns: [GridItem(.adaptive(minimum: 240, maximum: 360), spacing: 14, alignment: .top)],
+                                columns: Array(repeating: GridItem(.flexible(minimum: 200, maximum: .infinity), spacing: 16, alignment: .top), count: 3),
                                 alignment: .leading,
-                                spacing: 14)
+                                spacing: 16)
                             {
                                 ForEach(controller.accounts) { account in
                                     MainAccountCard(
@@ -871,10 +880,11 @@ struct MainWindowContent: View {
                         }
                     }
                 }
-                .padding(20)
+                .padding(24)
             }
+            .background(Color(nsColor: .underPageBackgroundColor).opacity(0.5))
         }
-        .frame(minWidth: 640, minHeight: 440)
+        .frame(minWidth: 800, minHeight: 600)
     }
 
     private var subtitle: String {
@@ -895,20 +905,21 @@ struct SummaryPanel: View {
     let detail: String
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 5) {
+        VStack(alignment: .leading, spacing: 6) {
             Text(title)
-                .font(.caption)
+                .font(.subheadline.weight(.medium))
                 .foregroundStyle(.secondary)
             Text(value)
-                .font(.title3.weight(.semibold))
+                .font(.title2.weight(.semibold))
             Text(detail)
                 .font(.caption)
                 .foregroundStyle(.secondary)
                 .lineLimit(1)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(14)
-        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 8))
+        .padding(16)
+        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 12))
+        .overlay(RoundedRectangle(cornerRadius: 12).stroke(Color.secondary.opacity(0.15), lineWidth: 1))
     }
 }
 
@@ -916,29 +927,31 @@ struct SummaryUsagePanel: View {
     let snapshot: UsageSnapshot
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Text("Combined")
-                .font(.caption)
+        VStack(alignment: .leading, spacing: 10) {
+            Text("Combined Usage")
+                .font(.subheadline.weight(.medium))
                 .foregroundStyle(.secondary)
             UsageBars(snapshot: snapshot, dimmed: false, combined: true, settings: .popup, forceInline: true)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(14)
-        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 8))
+        .padding(16)
+        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 12))
+        .overlay(RoundedRectangle(cornerRadius: 12).stroke(Color.secondary.opacity(0.15), lineWidth: 1))
     }
 }
 
 struct EmptyAccountsPanel: View {
     var body: some View {
-        VStack(alignment: .leading, spacing: 6) {
+        VStack(alignment: .leading, spacing: 8) {
             Text("No stored Codex profiles")
                 .font(.headline)
             Text("Use the menu bar item to add the currently active Codex account.")
                 .foregroundStyle(.secondary)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(16)
-        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 8))
+        .padding(20)
+        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 12))
+        .overlay(RoundedRectangle(cornerRadius: 12).stroke(Color.secondary.opacity(0.15), lineWidth: 1))
     }
 }
 
@@ -947,48 +960,81 @@ struct MainAccountCard: View {
     let settings: DisplaySettings
     let onSwitch: (String) -> Void
     let onEdit: (CodexAccountUsage) -> Void
+    @State private var isHovered = false
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            HStack(alignment: .firstTextBaseline, spacing: 10) {
-                Image(systemName: account.active ? "checkmark.circle.fill" : "circle")
-                    .foregroundStyle(account.active ? .green : .secondary)
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(account.displayName)
-                        .font(.headline)
-                    if settings.showEmails, !account.emailOrPlan.isEmpty {
-                        Text(account.emailOrPlan)
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
+        Button(action: {
+            if !account.active {
+                onSwitch(account.name)
+            }
+        }) {
+            VStack(alignment: .leading, spacing: 14) {
+                HStack(alignment: .center, spacing: 10) {
+                    Circle()
+                        .fill(account.active ? Color.green : Color.secondary.opacity(0.3))
+                        .frame(width: 10, height: 10)
+
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(account.displayName)
+                            .font(.headline)
+                            .foregroundStyle(account.active ? Color.primary : Color.primary.opacity(0.8))
+                            .lineLimit(1)
+                        if settings.showEmails, !account.emailOrPlan.isEmpty {
+                            Text(account.emailOrPlan)
+                                .font(.caption2)
+                                .foregroundStyle(.secondary)
+                                .lineLimit(1)
+                        }
                     }
-                }
-                Spacer()
-                Text(account.statusText)
-                    .font(.system(.caption, design: .monospaced))
-                    .foregroundStyle(account.isWasted ? .secondary : .primary)
-            }
+                    Spacer(minLength: 8)
 
-            if let snapshot = account.snapshot {
-                VStack(alignment: .leading, spacing: 10) {
-                    MainUsageMetric(title: "Session", window: snapshot.primary, dimmed: account.isWasted)
-                    MainUsageMetric(title: "Week", window: snapshot.secondary, dimmed: account.isWasted)
+                    Menu {
+                        Button("Edit Name/Label") { onEdit(account) }
+                    } label: {
+                        Image(systemName: "ellipsis")
+                            .frame(width: 24, height: 24)
+                            .contentShape(Rectangle())
+                    }
+                    .menuStyle(.borderlessButton)
+                    .frame(width: 24)
                 }
-            } else {
-                Text(account.error ?? "No usage")
-                    .font(.callout)
-                    .foregroundStyle(.secondary)
-            }
 
-            HStack {
-                Button("Switch") { onSwitch(account.name) }
-                    .disabled(account.active)
-                Button("Edit") { onEdit(account) }
-                Spacer()
+                if let snapshot = account.snapshot {
+                    VStack(alignment: .leading, spacing: 12) {
+                        MainUsageMetric(title: "Session", window: snapshot.primary, dimmed: account.isWasted)
+                        MainUsageMetric(title: "Week", window: snapshot.secondary, dimmed: account.isWasted)
+                    }
+                } else {
+                    Text(account.error ?? "No usage")
+                        .font(.callout)
+                        .foregroundStyle(.secondary)
+                        .frame(maxHeight: .infinity, alignment: .top)
+                }
+
+                Spacer(minLength: 0)
+
+                HStack {
+                    Text(account.statusText)
+                        .font(.system(.caption, design: .monospaced))
+                        .foregroundStyle(account.isWasted ? .secondary : .primary)
+                    Spacer()
+                }
             }
+            .padding(16)
+            .frame(maxWidth: .infinity, minHeight: 180, alignment: .topLeading)
+            .background(account.active ? Color.accentColor.opacity(0.08) : Color.clear, in: RoundedRectangle(cornerRadius: 12))
+            .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 12))
+            .overlay(
+                RoundedRectangle(cornerRadius: 12)
+                    .stroke(account.active ? Color.accentColor.opacity(0.5) : Color.secondary.opacity(0.15), lineWidth: account.active ? 2 : 1)
+            )
         }
-        .padding(14)
-        .frame(maxWidth: .infinity, minHeight: 190, alignment: .topLeading)
-        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 8))
+        .buttonStyle(.plain)
+        .onHover { hovering in
+            isHovered = hovering
+        }
+        .scaleEffect(isHovered && !account.active ? 1.01 : 1.0)
+        .animation(.easeOut(duration: 0.15), value: isHovered)
     }
 }
 
@@ -998,17 +1044,17 @@ struct MainUsageMetric: View {
     let dimmed: Bool
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 5) {
+        VStack(alignment: .leading, spacing: 6) {
             HStack(spacing: 8) {
                 Text(title)
-                    .font(.caption)
+                    .font(.caption.weight(.medium))
                     .foregroundStyle(.secondary)
                 Spacer(minLength: 8)
                 if let window {
                     Text(UsageText.remaining(window))
-                        .font(.system(.caption, design: .monospaced))
+                        .font(.system(.caption, design: .monospaced).weight(.medium))
                     Text(window.resetDescription ?? "reset unknown")
-                        .font(.caption2)
+                        .font(.system(size: 10))
                         .foregroundStyle(.secondary)
                         .lineLimit(1)
                 } else {
@@ -1022,6 +1068,245 @@ struct MainUsageMetric: View {
                 ProgressView(value: max(0, min(100, window.remainingPercent)), total: 100)
                     .tint(dimmed ? .gray : UsageColor.color(for: window.remainingPercent))
             }
+        }
+    }
+}
+
+struct ActivityGraphWidget: View {
+    let accounts: [CodexAccountUsage]
+    let samples: [UsageHistorySample]
+
+    private var days: [UsageHistoryDay] {
+        UsageHistoryAnalytics.days(samples: samples, accounts: accounts, count: 112)
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("Activity")
+                .font(.subheadline.weight(.medium))
+                .foregroundStyle(.secondary)
+
+            HStack(spacing: 4) {
+                ForEach(0..<16, id: \.self) { week in
+                    VStack(spacing: 4) {
+                        ForEach(0..<7, id: \.self) { day in
+                            let historyDay = days[week * 7 + day]
+                            RoundedRectangle(cornerRadius: 2)
+                                .fill(color(for: level(for: historyDay.total)))
+                                .frame(width: 12, height: 12)
+                                .help(historyDay.helpText)
+                        }
+                    }
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .center)
+            Spacer(minLength: 0)
+        }
+        .padding(16)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 12))
+        .overlay(RoundedRectangle(cornerRadius: 12).stroke(Color.secondary.opacity(0.15), lineWidth: 1))
+    }
+
+    func level(for total: Double) -> Int {
+        switch total {
+        case ...0:
+            return 0
+        case 0..<3:
+            return 1
+        case 3..<10:
+            return 2
+        default:
+            return 3
+        }
+    }
+
+    func color(for level: Int) -> Color {
+        switch level {
+        case 0: return Color.secondary.opacity(0.15)
+        case 1: return Color.green.opacity(0.4)
+        case 2: return Color.green.opacity(0.7)
+        case 3: return Color.green
+        default: return Color.secondary.opacity(0.15)
+        }
+    }
+}
+
+struct WeeklyUsageWidget: View {
+    let accounts: [CodexAccountUsage]
+    let samples: [UsageHistorySample]
+
+    private var days: [UsageHistoryDay] {
+        UsageHistoryAnalytics.days(samples: samples, accounts: accounts, count: 7)
+    }
+
+    private var maxTotal: Double {
+        max(1, days.map(\.total).max() ?? 1)
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("Last 7 Days")
+                .font(.subheadline.weight(.medium))
+                .foregroundStyle(.secondary)
+
+            HStack(alignment: .bottom, spacing: 12) {
+                ForEach(days) { day in
+                    VStack(spacing: 6) {
+                        if day.segments.isEmpty {
+                            RoundedRectangle(cornerRadius: 3)
+                                .fill(Color.secondary.opacity(0.15))
+                                .frame(width: 18, height: 92)
+                        } else {
+                            VStack(spacing: 1) {
+                                Spacer(minLength: 0)
+                                ForEach(day.segments) { segment in
+                                    RoundedRectangle(cornerRadius: 2)
+                                        .fill(segment.color)
+                                        .frame(width: 18, height: height(for: segment.amount, total: day.total))
+                                }
+                            }
+                            .frame(width: 18, height: 92)
+                        }
+
+                        Text(day.shortLabel)
+                            .font(.system(size: 10, weight: .medium))
+                            .foregroundStyle(.secondary)
+                    }
+                    .help(day.helpText)
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .center)
+
+            HStack(spacing: 10) {
+                ForEach(accounts.prefix(4)) { account in
+                    HStack(spacing: 4) {
+                        Circle()
+                            .fill(AccountColor.color(for: account.name))
+                            .frame(width: 6, height: 6)
+                        Text(account.displayName)
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                            .lineLimit(1)
+                    }
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .center)
+
+            Spacer(minLength: 0)
+        }
+        .padding(16)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 12))
+        .overlay(RoundedRectangle(cornerRadius: 12).stroke(Color.secondary.opacity(0.15), lineWidth: 1))
+    }
+
+    func height(for amount: Double, total: Double) -> CGFloat {
+        let totalHeight = max(5, 92 * CGFloat(total / maxTotal))
+        return max(3, totalHeight * CGFloat(amount / max(total, 0.1)))
+    }
+}
+
+enum AccountColor {
+    private static let palette: [Color] = [
+        .blue,
+        .green,
+        .orange,
+        .pink,
+        .teal,
+        .indigo,
+        .red,
+        .cyan,
+        .yellow,
+    ]
+
+    static func color(for name: String) -> Color {
+        let value = name.unicodeScalars.reduce(0) { partial, scalar in
+            (partial &* 31 &+ Int(scalar.value)) & 0x7fffffff
+        }
+        return palette[value % palette.count]
+    }
+}
+
+struct UsageHistoryDay: Identifiable {
+    let date: Date
+    let segments: [UsageHistorySegment]
+    let total: Double
+
+    var id: Date { Calendar.current.startOfDay(for: date) }
+
+    var shortLabel: String {
+        let formatter = DateFormatter()
+        formatter.dateFormat = "E"
+        return formatter.string(from: date).prefix(1).uppercased()
+    }
+
+    var helpText: String {
+        let formatter = DateFormatter()
+        formatter.dateFormat = "EEE, MMM d"
+        if total <= 0 {
+            return "\(formatter.string(from: date)): no recorded usage"
+        }
+        return "\(formatter.string(from: date)): \(Int(total.rounded())) usage points"
+    }
+}
+
+struct UsageHistorySegment: Identifiable {
+    let accountName: String
+    let displayName: String
+    let amount: Double
+    let color: Color
+
+    var id: String { accountName }
+}
+
+enum UsageHistoryAnalytics {
+    static func days(
+        samples: [UsageHistorySample],
+        accounts: [CodexAccountUsage],
+        count: Int,
+        calendar: Calendar = .current,
+        now: Date = Date())
+        -> [UsageHistoryDay]
+    {
+        let startToday = calendar.startOfDay(for: now)
+        let sorted = samples.sorted { $0.timestamp < $1.timestamp }
+        let accountNames = accounts.map(\.name)
+
+        return (0..<count).map { offset in
+            let date = calendar.date(byAdding: .day, value: -(count - 1 - offset), to: startToday) ?? startToday
+            let nextDate = calendar.date(byAdding: .day, value: 1, to: date) ?? date
+            let segments = accountNames.compactMap { name -> UsageHistorySegment? in
+                let accountSamples = sorted.filter { $0.accountName == name }
+                guard let last = accountSamples.last(where: { $0.timestamp < nextDate }) else { return nil }
+                let previous = accountSamples.last { $0.timestamp < date }
+                let firstToday = accountSamples.first { $0.timestamp >= date && $0.timestamp < nextDate }
+                guard firstToday != nil else { return nil }
+
+                let rawAmount: Double
+                if let previous {
+                    rawAmount = last.usedPercent >= previous.usedPercent
+                        ? last.usedPercent - previous.usedPercent
+                        : last.usedPercent
+                } else if calendar.isDate(date, inSameDayAs: startToday) {
+                    rawAmount = last.usedPercent
+                } else if let firstToday {
+                    rawAmount = max(0, last.usedPercent - firstToday.usedPercent)
+                } else {
+                    rawAmount = 0
+                }
+
+                let amount = min(100, max(0, rawAmount))
+                guard amount > 0 else { return nil }
+                let displayName = accounts.first(where: { $0.name == name })?.displayName ?? name
+                return UsageHistorySegment(
+                    accountName: name,
+                    displayName: displayName,
+                    amount: amount,
+                    color: AccountColor.color(for: name))
+            }
+            let total = segments.map(\.amount).reduce(0, +)
+            return UsageHistoryDay(date: date, segments: segments, total: total)
         }
     }
 }
@@ -1396,9 +1681,61 @@ struct VisibleUsageBar: Identifiable {
     var id: UsageWindowKind { kind }
 }
 
+struct UsageHistorySample: Codable, Sendable {
+    let accountName: String
+    let timestamp: Date
+    let usedPercent: Double
+
+    enum CodingKeys: String, CodingKey {
+        case accountName = "account_name"
+        case timestamp
+        case usedPercent = "used_percent"
+    }
+}
+
+enum UsageHistoryStore {
+    private static let retentionDays = 120
+
+    static func load() -> [UsageHistorySample] {
+        guard let data = try? Data(contentsOf: CodexProfileStore.usageHistoryURL) else { return [] }
+        return (try? JSONDecoder().decode([UsageHistorySample].self, from: data)) ?? []
+    }
+
+    static func record(accounts: [CodexAccountUsage], now: Date = Date()) -> [UsageHistorySample] {
+        var samples = self.load()
+        for account in accounts {
+            guard let usedPercent = account.snapshot?.secondary?.usedPercent else { continue }
+            samples.append(UsageHistorySample(
+                accountName: account.name,
+                timestamp: now,
+                usedPercent: max(0, min(100, usedPercent))))
+        }
+
+        let cutoff = Calendar.current.date(byAdding: .day, value: -retentionDays, to: now) ?? now
+        samples = samples.filter { $0.timestamp >= cutoff }
+        self.save(samples)
+        return samples
+    }
+
+    private static func save(_ samples: [UsageHistorySample]) {
+        do {
+            try FileManager.default.createDirectory(
+                at: CodexProfileStore.usageHistoryURL.deletingLastPathComponent(),
+                withIntermediateDirectories: true)
+            let encoder = JSONEncoder()
+            encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+            let data = try encoder.encode(samples)
+            try data.write(to: CodexProfileStore.usageHistoryURL, options: .atomic)
+        } catch {
+            NSLog("CodexMaxx failed to save usage history: \(error.localizedDescription)")
+        }
+    }
+}
+
 @MainActor
 final class UsageController: ObservableObject {
     @Published private(set) var accounts: [CodexAccountUsage] = []
+    @Published private(set) var usageHistory: [UsageHistorySample] = UsageHistoryStore.load()
     @Published private(set) var updatedAt = Date()
     @Published private(set) var isRefreshing = false
     @Published private(set) var lastError: String?
@@ -1408,7 +1745,7 @@ final class UsageController: ObservableObject {
         defer { self.isRefreshing = false }
         do {
             let profiles = try CodexProfileStore.loadProfiles()
-            self.accounts = await withTaskGroup(of: CodexAccountUsage.self) { group in
+            let accounts = await withTaskGroup(of: CodexAccountUsage.self) { group in
                 for profile in profiles {
                     group.addTask {
                         await CodexUsageLoader.load(profile: profile)
@@ -1423,6 +1760,8 @@ final class UsageController: ObservableObject {
                     return lhs.name.localizedStandardCompare(rhs.name) == .orderedAscending
                 }
             }
+            self.accounts = accounts
+            self.usageHistory = UsageHistoryStore.record(accounts: accounts)
             self.updatedAt = Date()
             self.lastError = nil
         } catch {
@@ -1683,6 +2022,9 @@ enum CodexProfileStore {
     }
     private static var codexProfilesRoot: URL {
         Self.managedRoot.appendingPathComponent("profiles/codex")
+    }
+    static var usageHistoryURL: URL {
+        Self.managedRoot.appendingPathComponent("usage-history.json")
     }
     private static let liveCodexHome = FileManager.default.homeDirectoryForCurrentUser
         .appendingPathComponent(".codex")
