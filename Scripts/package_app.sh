@@ -40,6 +40,8 @@ fi
   -c "Add :CFBundleShortVersionString string $VERSION" \
   -c "Add :CFBundleIconFile string $ICON_FILE" \
   -c 'Add :LSMinimumSystemVersion string 14.0' \
+  -c 'Add :NSHighResolutionCapable bool true' \
+  -c 'Add :NSPrincipalClass string NSApplication' \
   "$APP/Contents/Info.plist"
 
 /usr/libexec/PlistBuddy -c 'Clear dict' \
@@ -62,26 +64,7 @@ xattr -cr "$APP" 2>/dev/null || true
 
 clear_code_signing_xattrs() {
   xattr -cr "$APP" 2>/dev/null || true
-  local sparkle_current="$APP/Contents/Frameworks/Sparkle.framework/Versions/Current"
-  if command -v SetFile >/dev/null 2>&1; then
-    while IFS= read -r target; do
-      SetFile -a abcdeilmnstvz "$target" 2>/dev/null || true
-    done < <(
-      find "$APP" -xattrname com.apple.FinderInfo -print 2>/dev/null || true
-      if [[ -e "$sparkle_current" ]]; then
-        find "$sparkle_current" -xattrname com.apple.FinderInfo -print 2>/dev/null || true
-      fi
-    )
-  fi
-  while IFS= read -r target; do
-    xattr -d com.apple.FinderInfo "$target" 2>/dev/null || true
-    xattr -d 'com.apple.fileprovider.fpfs#P' "$target" 2>/dev/null || true
-  done < <(
-    find "$APP" \( -xattrname com.apple.FinderInfo -o -xattrname 'com.apple.fileprovider.fpfs#P' \) -print 2>/dev/null || true
-    if [[ -e "$sparkle_current" ]]; then
-      find "$sparkle_current" \( -xattrname com.apple.FinderInfo -o -xattrname 'com.apple.fileprovider.fpfs#P' \) -print 2>/dev/null || true
-    fi
-  )
+  xattr -cr "$APP/Contents/Frameworks/Sparkle.framework" 2>/dev/null || true
 }
 
 clear_code_signing_xattrs
@@ -100,13 +83,16 @@ sign_path() {
 if [[ -d "$APP/Contents/Frameworks/Sparkle.framework" ]]; then
   sign_path "$APP/Contents/Frameworks/Sparkle.framework"
 fi
-xattr -cr "$APP" 2>/dev/null || true
+clear_code_signing_xattrs
 if ! codesign --force --deep "$TIMESTAMP_FLAG" --options runtime --entitlements "$ENTITLEMENTS" --sign "$SIGN_IDENTITY" "$APP"; then
+  clear_code_signing_xattrs
+  codesign --force --deep "$TIMESTAMP_FLAG" --options runtime --entitlements "$ENTITLEMENTS" --sign "$SIGN_IDENTITY" "$APP" || {
   if [[ "$SIGN_IDENTITY" == "-" ]]; then
     exit 1
   fi
   echo "Developer ID signing failed for $APP; falling back to ad-hoc signing." >&2
   codesign --force --deep --timestamp=none --options runtime --entitlements "$ENTITLEMENTS" --sign - "$APP"
+  }
 fi
 clear_code_signing_xattrs
 

@@ -333,7 +333,6 @@ struct CodexMaxxApp {
         app.setActivationPolicy(.regular)
         let delegate = AppDelegate()
         app.delegate = delegate
-        delegate.start()
         withExtendedLifetime(delegate) {
             app.run()
         }
@@ -363,6 +362,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     func start() {
         guard !self.didStart else { return }
         self.didStart = true
+        NSApp.mainMenu = self.makeMainMenu()
         self.statusItem.button?.title = "..."
         self.statusItem.button?.font = .monospacedDigitSystemFont(ofSize: 12, weight: .medium)
         self.statusItem.menu = self.makeMenu()
@@ -375,6 +375,31 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 await self?.refreshAndRender()
             }
         }
+    }
+
+    private func makeMainMenu() -> NSMenu {
+        let mainMenu = NSMenu()
+
+        let appItem = NSMenuItem()
+        let appMenu = NSMenu()
+        appMenu.addItem(NSMenuItem(title: "About \(AppInfo.displayName)", action: #selector(NSApplication.orderFrontStandardAboutPanel(_:)), keyEquivalent: ""))
+        appMenu.addItem(.separator())
+        appMenu.addItem(NSMenuItem(title: "Settings...", action: #selector(openSettingsWindow), keyEquivalent: ","))
+        appMenu.addItem(.separator())
+        appMenu.addItem(NSMenuItem(title: "Quit \(AppInfo.displayName)", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q"))
+        appItem.submenu = appMenu
+        mainMenu.addItem(appItem)
+
+        let windowItem = NSMenuItem()
+        let windowMenu = NSMenu(title: "Window")
+        windowMenu.addItem(NSMenuItem(title: "Show \(AppInfo.displayName)", action: #selector(openMainWindow), keyEquivalent: "0"))
+        windowMenu.addItem(NSMenuItem(title: "Minimize", action: #selector(NSWindow.miniaturize(_:)), keyEquivalent: "m"))
+        windowMenu.addItem(NSMenuItem(title: "Close", action: #selector(NSWindow.performClose(_:)), keyEquivalent: "w"))
+        windowItem.submenu = windowMenu
+        mainMenu.addItem(windowItem)
+        NSApp.windowsMenu = windowMenu
+
+        return mainMenu
     }
 
     func applicationShouldHandleReopen(_: NSApplication, hasVisibleWindows _: Bool) -> Bool {
@@ -554,14 +579,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private func showMainWindow() {
         if self.mainWindowController == nil {
             let host = NSHostingController(rootView: self.makeMainWindowContent())
-            let window = NSWindow(contentViewController: host)
+            let window = NSWindow(
+                contentRect: NSRect(x: 0, y: 0, width: 800, height: 600),
+                styleMask: [.titled, .closable, .miniaturizable, .resizable],
+                backing: .buffered,
+                defer: false)
+            window.contentViewController = host
             window.title = AppInfo.displayName
-            window.styleMask = [.titled, .closable, .miniaturizable, .resizable, .fullSizeContentView]
             window.titleVisibility = .hidden
             window.titlebarAppearsTransparent = true
             window.isMovableByWindowBackground = true
+            window.isReleasedWhenClosed = false
+            window.isRestorable = false
+            window.tabbingMode = .disallowed
+            window.sharingType = .readOnly
             window.backgroundColor = .underPageBackgroundColor
-            window.setContentSize(NSSize(width: 800, height: 600))
             window.minSize = NSSize(width: 760, height: 500)
             window.center()
             self.mainWindowHost = host
@@ -570,6 +602,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         self.updateWindowContent()
         self.mainWindowController?.showWindow(nil)
         NSApp.activate(ignoringOtherApps: true)
+        self.mainWindowController?.window?.makeKeyAndOrderFront(nil)
+        self.mainWindowController?.window?.orderFrontRegardless()
+        self.mainWindowController?.window?.sharingType = .readOnly
     }
 
     @objc private func openSettingsWindow() {
@@ -944,11 +979,11 @@ struct MainToolbar: View {
             .help("Open settings")
             .focusable(false)
         }
-        .padding(.leading, 132)
+        .padding(.leading, 12)
         .padding(.trailing, 12)
         .padding(.vertical, 7)
         .frame(minHeight: 38)
-        .background(Color(nsColor: .underPageBackgroundColor).opacity(0.5))
+        .background(Color(nsColor: .underPageBackgroundColor))
         .overlay(alignment: .bottom) {
             Rectangle()
                 .fill(Color.primary.opacity(0.08))
