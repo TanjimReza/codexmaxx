@@ -135,6 +135,9 @@ struct DisplaySettings: Sendable {
     var layout: BarLayout
     var showNumbers: Bool
     var showEmails: Bool
+    var showSessionMenuBarIcon: Bool
+    var blinkSessionIconWhenIdle: Bool
+    var beepWhenIdle: Bool
 
     static func load() -> DisplaySettings {
         let defaults = UserDefaults.standard
@@ -144,7 +147,10 @@ struct DisplaySettings: Sendable {
             labels: LabelStyle(rawValue: defaults.string(forKey: "display.labels") ?? "") ?? .letters,
             layout: BarLayout(rawValue: defaults.string(forKey: "display.layout") ?? "") ?? .inline,
             showNumbers: defaults.object(forKey: "display.showNumbers") as? Bool ?? true,
-            showEmails: defaults.object(forKey: "display.showEmails") as? Bool ?? true)
+            showEmails: defaults.object(forKey: "display.showEmails") as? Bool ?? true,
+            showSessionMenuBarIcon: defaults.object(forKey: "display.showSessionMenuBarIcon") as? Bool ?? true,
+            blinkSessionIconWhenIdle: defaults.object(forKey: "display.blinkSessionIconWhenIdle") as? Bool ?? false,
+            beepWhenIdle: defaults.object(forKey: "display.beepWhenIdle") as? Bool ?? false)
     }
 
     func save() {
@@ -155,10 +161,22 @@ struct DisplaySettings: Sendable {
         defaults.set(self.layout.rawValue, forKey: "display.layout")
         defaults.set(self.showNumbers, forKey: "display.showNumbers")
         defaults.set(self.showEmails, forKey: "display.showEmails")
+        defaults.set(self.showSessionMenuBarIcon, forKey: "display.showSessionMenuBarIcon")
+        defaults.set(self.blinkSessionIconWhenIdle, forKey: "display.blinkSessionIconWhenIdle")
+        defaults.set(self.beepWhenIdle, forKey: "display.beepWhenIdle")
     }
 
     static var popup: DisplaySettings {
-        DisplaySettings(source: .combined, windows: .both, labels: .letters, layout: .inline, showNumbers: true, showEmails: true)
+        DisplaySettings(
+            source: .combined,
+            windows: .both,
+            labels: .letters,
+            layout: .inline,
+            showNumbers: true,
+            showEmails: true,
+            showSessionMenuBarIcon: true,
+            blinkSessionIconWhenIdle: false,
+            beepWhenIdle: false)
     }
 
     func label(for kind: UsageWindowKind) -> String {
@@ -197,6 +215,77 @@ enum UsageColor {
             return .systemOrange
         default:
             return .systemRed
+        }
+    }
+}
+
+struct CodexSessionStatus: Sendable {
+    let count: Int
+    let sampledAt: Date
+
+    var hasActiveSession: Bool {
+        self.count > 0
+    }
+
+    var detail: String {
+        self.hasActiveSession ? "In progress" : "No active session"
+    }
+
+    var menuBarTitle: String {
+        "\(self.count)"
+    }
+}
+
+enum CodexSessionMonitor {
+    private static let activityWindowSeconds = 180
+
+    static func load(now: Date = Date()) -> CodexSessionStatus {
+        let logsURL = FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent(".codex/logs_2.sqlite")
+        guard FileManager.default.fileExists(atPath: logsURL.path) else {
+            return CodexSessionStatus(count: 0, sampledAt: now)
+        }
+
+        let cutoff = Int(now.timeIntervalSince1970) - self.activityWindowSeconds
+        let query = """
+        select count(distinct thread_id)
+        from logs
+        where thread_id is not null
+          and ts >= \(cutoff)
+          and feedback_log_body like '%:turn{%'
+          and feedback_log_body like '%codex.op="user_input_with_turn_context"%';
+        """
+        return CodexSessionStatus(
+            count: max(0, self.sqliteInteger(database: logsURL, query: query) ?? 0),
+            sampledAt: now)
+    }
+
+    private static func sqliteInteger(database: URL, query: String) -> Int? {
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/sqlite3")
+        process.arguments = [
+            "-readonly",
+            "-batch",
+            "-cmd",
+            ".timeout 100",
+            database.path,
+            query,
+        ]
+
+        let output = Pipe()
+        process.standardOutput = output
+        process.standardError = Pipe()
+
+        do {
+            try process.run()
+            process.waitUntilExit()
+            guard process.terminationStatus == 0 else { return nil }
+            let data = output.fileHandleForReading.readDataToEndOfFile()
+            let text = String(data: data, encoding: .utf8)?
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            return Int(text ?? "")
+        } catch {
+            return nil
         }
     }
 }
@@ -342,6 +431,7 @@ struct CodexMaxxApp {
 @MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate {
     private let statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
+    private let sessionStatusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
     private let controller = UsageController()
     private var settings = DisplaySettings.load()
     private var loadBalancerSettings = CodexProfileStore.loadLoadBalancerSettings()
@@ -350,6 +440,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var settingsWindowController: NSWindowController?
     private var settingsWindowHost: NSHostingController<SettingsWindowContent>?
     private var didStart = false
+    private var sessionBlinkVisible = true
+    private var lastIdleSessionBeepAt: Date?
     private lazy var updaterController = SPUStandardUpdaterController(
         startingUpdater: true,
         updaterDelegate: nil,
@@ -366,10 +458,27 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         self.statusItem.button?.title = "..."
         self.statusItem.button?.font = .monospacedDigitSystemFont(ofSize: 12, weight: .medium)
         self.statusItem.menu = self.makeMenu()
+        self.sessionStatusItem.button?.font = .monospacedDigitSystemFont(ofSize: 12, weight: .medium)
+        self.sessionStatusItem.button?.imagePosition = .imageLeading
+        self.sessionStatusItem.button?.target = self
+        self.sessionStatusItem.button?.action = #selector(openMainWindow)
+        self.renderSessionStatusItem()
         DispatchQueue.main.async {
             self.showMainWindow()
         }
         Task { await self.refreshAndRender() }
+        Timer.scheduledTimer(withTimeInterval: 5, repeats: true) { [weak self] _ in
+            Task { @MainActor in
+                await self?.refreshSessionStatusAndRender()
+            }
+        }
+        Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { [weak self] _ in
+            Task { @MainActor in
+                guard let self else { return }
+                self.sessionBlinkVisible.toggle()
+                self.renderSessionStatusItem()
+            }
+        }
         Timer.scheduledTimer(withTimeInterval: 120, repeats: true) { [weak self] _ in
             Task { @MainActor in
                 await self?.refreshAndRender()
@@ -409,8 +518,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private func refreshAndRender() async {
         await self.controller.refresh()
+        await self.controller.refreshSessionStatus()
         await self.controller.autoBalanceIfNeeded(settings: self.loadBalancerSettings)
         self.render()
+    }
+
+    private func refreshSessionStatusAndRender() async {
+        await self.controller.refreshSessionStatus()
+        self.renderSessionStatusItem()
+        self.handleIdleSessionSound()
     }
 
     private func render() {
@@ -425,6 +541,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 : UsageMath.combined(rows.map(\.snapshot))
             self.renderStatusItem(snapshot: source)
         }
+        self.renderSessionStatusItem()
+        self.handleIdleSessionSound()
         self.statusItem.menu = self.makeMenu()
         self.updateWindowContent()
     }
@@ -453,6 +571,42 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             self.statusItem.length = image.size.width + 8
             self.statusItem.button?.image = image
         }
+    }
+
+    private func renderSessionStatusItem() {
+        self.sessionStatusItem.isVisible = self.settings.showSessionMenuBarIcon
+        guard self.settings.showSessionMenuBarIcon, let button = self.sessionStatusItem.button else { return }
+
+        let status = self.controller.sessionStatus
+        let symbolName = status.hasActiveSession ? "play.circle.fill" : "pause.circle"
+        let image = NSImage(systemSymbolName: symbolName, accessibilityDescription: "Codex sessions")
+        image?.isTemplate = true
+        button.image = image
+        button.imagePosition = .imageLeading
+        button.title = status.menuBarTitle
+        button.toolTip = status.hasActiveSession
+            ? "\(status.count) Codex session\(status.count == 1 ? "" : "s") in progress"
+            : "No Codex sessions in progress"
+        button.alphaValue = self.settings.blinkSessionIconWhenIdle && !status.hasActiveSession && !self.sessionBlinkVisible ? 0.18 : 1
+    }
+
+    private func handleIdleSessionSound() {
+        guard self.settings.beepWhenIdle else {
+            self.lastIdleSessionBeepAt = nil
+            return
+        }
+
+        guard !self.controller.sessionStatus.hasActiveSession else {
+            self.lastIdleSessionBeepAt = nil
+            return
+        }
+
+        let now = Date()
+        if let lastIdleSessionBeepAt, now.timeIntervalSince(lastIdleSessionBeepAt) < 60 {
+            return
+        }
+        NSSound.beep()
+        self.lastIdleSessionBeepAt = now
     }
 
     private func makeMenu() -> NSMenu {
@@ -522,6 +676,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         menu.addItem(.separator())
         self.addSetting(menu, "Numbers", self.settings.showNumbers, #selector(toggleNumbers))
         self.addSetting(menu, "Show Emails", self.settings.showEmails, #selector(toggleEmails))
+        menu.addItem(.separator())
+        self.addSetting(menu, "Session Menu Bar Icon", self.settings.showSessionMenuBarIcon, #selector(toggleSessionMenuBarIcon))
+        self.addSetting(menu, "Blink When No Session", self.settings.blinkSessionIconWhenIdle, #selector(toggleSessionBlinkWhenIdle))
+        self.addSetting(menu, "Beep When No Session", self.settings.beepWhenIdle, #selector(toggleSessionBeepWhenIdle))
         menu.addItem(.separator())
         self.addSetting(menu, "Load Balancer", self.loadBalancerSettings.enabled, #selector(toggleLoadBalancer))
         self.addSetting(
@@ -693,6 +851,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     @objc private func useCircleBarsIcon() { self.updateSettings { $0.layout = .circles } }
     @objc private func toggleNumbers() { self.updateSettings { $0.showNumbers.toggle() } }
     @objc private func toggleEmails() { self.updateSettings { $0.showEmails.toggle() } }
+    @objc private func toggleSessionMenuBarIcon() { self.updateSettings { $0.showSessionMenuBarIcon.toggle() } }
+    @objc private func toggleSessionBlinkWhenIdle() { self.updateSettings { $0.blinkSessionIconWhenIdle.toggle() } }
+    @objc private func toggleSessionBeepWhenIdle() { self.updateSettings { $0.beepWhenIdle.toggle() } }
     @objc private func toggleLoadBalancer() { self.updateLoadBalancerSettings { $0.enabled.toggle() } }
     @objc private func toggleLoadBalancerAutoSwitch() { self.updateLoadBalancerSettings { $0.autoSwitchWhenWasted.toggle() } }
     @objc private func togglePreferEarlierReset() { self.updateLoadBalancerSettings { $0.preferEarlierReset.toggle() } }
@@ -757,6 +918,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             onSetLayout: { [weak self] value in self?.updateSettings { $0.layout = value } },
             onSetShowNumbers: { [weak self] value in self?.updateSettings { $0.showNumbers = value } },
             onSetShowEmails: { [weak self] value in self?.updateSettings { $0.showEmails = value } },
+            onSetShowSessionMenuBarIcon: { [weak self] value in self?.updateSettings { $0.showSessionMenuBarIcon = value } },
+            onSetBlinkSessionIconWhenIdle: { [weak self] value in self?.updateSettings { $0.blinkSessionIconWhenIdle = value } },
+            onSetBeepWhenIdle: { [weak self] value in self?.updateSettings { $0.beepWhenIdle = value } },
             onSetLoadBalancerEnabled: { [weak self] value in self?.updateLoadBalancerSettings { $0.enabled = value } },
             onSetAutoSwitch: { [weak self] value in self?.updateLoadBalancerSettings { $0.autoSwitchWhenWasted = value } },
             onSetPreferEarlierReset: { [weak self] value in self?.updateLoadBalancerSettings { $0.preferEarlierReset = value } },
@@ -771,7 +935,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 final class HostingMenuView<Content: View>: NSHostingView<Content> {
     required init(rootView: Content) {
         super.init(rootView: rootView)
-        self.frame = NSRect(x: 0, y: 0, width: 320, height: 210)
+        self.frame = NSRect(x: 0, y: 0, width: 320, height: 230)
     }
 
     @available(*, unavailable)
@@ -816,6 +980,8 @@ struct MenuContent: View {
                 CombinedUsageView(snapshot: combined)
             }
 
+            SessionMenuStatusRow(status: controller.sessionStatus)
+
             Divider()
 
             ForEach(controller.accounts) { account in
@@ -829,6 +995,26 @@ struct MenuContent: View {
         .padding(.horizontal, 12)
         .padding(.bottom, 4)
         .frame(width: 320, alignment: .leading)
+    }
+}
+
+struct SessionMenuStatusRow: View {
+    let status: CodexSessionStatus
+
+    var body: some View {
+        HStack(spacing: 6) {
+            Image(systemName: status.hasActiveSession ? "play.circle.fill" : "pause.circle")
+                .foregroundStyle(status.hasActiveSession ? Color.accentColor : Color.secondary)
+            Text("Sessions")
+                .foregroundStyle(.secondary)
+            Spacer()
+            Text("\(status.count)")
+                .font(.system(.caption, design: .monospaced).weight(.semibold))
+            Text(status.detail)
+                .font(.caption2)
+                .foregroundStyle(.secondary)
+        }
+        .font(.caption)
     }
 }
 
@@ -868,8 +1054,13 @@ struct MainWindowContent: View {
 
                     // Dashboard Widgets
                     VStack(spacing: 16) {
-                        HStack(alignment: .top, spacing: 16) {
+                        LazyVGrid(
+                            columns: [GridItem(.adaptive(minimum: 250), spacing: 16, alignment: .top)],
+                            alignment: .leading,
+                            spacing: 16)
+                        {
                             SummaryPanel(title: "Accounts", value: "\(controller.accounts.count)", detail: self.activeAccountName)
+                            SummaryPanel(title: "Sessions", value: "\(controller.sessionStatus.count)", detail: controller.sessionStatus.detail)
                             SummaryPanel(title: "Load Balancer", value: loadBalancerSettings.enabled ? "On" : "Off", detail: loadBalancerSettings.strategy.title)
                             if let combined = UsageMath.combined(controller.accounts.map(\.snapshot)) {
                                 SummaryUsagePanel(snapshot: combined)
@@ -1765,6 +1956,9 @@ struct SettingsWindowContent: View {
     @State private var layout: BarLayout
     @State private var showNumbers: Bool
     @State private var showEmails: Bool
+    @State private var showSessionMenuBarIcon: Bool
+    @State private var blinkSessionIconWhenIdle: Bool
+    @State private var beepWhenIdle: Bool
     @State private var loadBalancerEnabled: Bool
     @State private var autoSwitch: Bool
     @State private var preferEarlierReset: Bool
@@ -1776,6 +1970,9 @@ struct SettingsWindowContent: View {
     let onSetLayout: (BarLayout) -> Void
     let onSetShowNumbers: (Bool) -> Void
     let onSetShowEmails: (Bool) -> Void
+    let onSetShowSessionMenuBarIcon: (Bool) -> Void
+    let onSetBlinkSessionIconWhenIdle: (Bool) -> Void
+    let onSetBeepWhenIdle: (Bool) -> Void
     let onSetLoadBalancerEnabled: (Bool) -> Void
     let onSetAutoSwitch: (Bool) -> Void
     let onSetPreferEarlierReset: (Bool) -> Void
@@ -1790,6 +1987,9 @@ struct SettingsWindowContent: View {
         onSetLayout: @escaping (BarLayout) -> Void,
         onSetShowNumbers: @escaping (Bool) -> Void,
         onSetShowEmails: @escaping (Bool) -> Void,
+        onSetShowSessionMenuBarIcon: @escaping (Bool) -> Void,
+        onSetBlinkSessionIconWhenIdle: @escaping (Bool) -> Void,
+        onSetBeepWhenIdle: @escaping (Bool) -> Void,
         onSetLoadBalancerEnabled: @escaping (Bool) -> Void,
         onSetAutoSwitch: @escaping (Bool) -> Void,
         onSetPreferEarlierReset: @escaping (Bool) -> Void,
@@ -1801,6 +2001,9 @@ struct SettingsWindowContent: View {
         self._layout = State(initialValue: displaySettings.layout)
         self._showNumbers = State(initialValue: displaySettings.showNumbers)
         self._showEmails = State(initialValue: displaySettings.showEmails)
+        self._showSessionMenuBarIcon = State(initialValue: displaySettings.showSessionMenuBarIcon)
+        self._blinkSessionIconWhenIdle = State(initialValue: displaySettings.blinkSessionIconWhenIdle)
+        self._beepWhenIdle = State(initialValue: displaySettings.beepWhenIdle)
         self._loadBalancerEnabled = State(initialValue: loadBalancerSettings.enabled)
         self._autoSwitch = State(initialValue: loadBalancerSettings.autoSwitchWhenWasted)
         self._preferEarlierReset = State(initialValue: loadBalancerSettings.preferEarlierReset)
@@ -1811,6 +2014,9 @@ struct SettingsWindowContent: View {
         self.onSetLayout = onSetLayout
         self.onSetShowNumbers = onSetShowNumbers
         self.onSetShowEmails = onSetShowEmails
+        self.onSetShowSessionMenuBarIcon = onSetShowSessionMenuBarIcon
+        self.onSetBlinkSessionIconWhenIdle = onSetBlinkSessionIconWhenIdle
+        self.onSetBeepWhenIdle = onSetBeepWhenIdle
         self.onSetLoadBalancerEnabled = onSetLoadBalancerEnabled
         self.onSetAutoSwitch = onSetAutoSwitch
         self.onSetPreferEarlierReset = onSetPreferEarlierReset
@@ -1842,6 +2048,9 @@ struct SettingsWindowContent: View {
                 }
                 Toggle("Show numbers", isOn: $showNumbers)
                 Toggle("Show emails", isOn: $showEmails)
+                Toggle("Show session icon", isOn: $showSessionMenuBarIcon)
+                Toggle("Blink when no active session", isOn: $blinkSessionIconWhenIdle)
+                Toggle("Beep when no active session", isOn: $beepWhenIdle)
             }
 
             Section("Load Balancer") {
@@ -1884,6 +2093,9 @@ struct SettingsWindowContent: View {
         .onChange(of: layout) { _, value in onSetLayout(value) }
         .onChange(of: showNumbers) { _, value in onSetShowNumbers(value) }
         .onChange(of: showEmails) { _, value in onSetShowEmails(value) }
+        .onChange(of: showSessionMenuBarIcon) { _, value in onSetShowSessionMenuBarIcon(value) }
+        .onChange(of: blinkSessionIconWhenIdle) { _, value in onSetBlinkSessionIconWhenIdle(value) }
+        .onChange(of: beepWhenIdle) { _, value in onSetBeepWhenIdle(value) }
         .onChange(of: loadBalancerEnabled) { _, value in onSetLoadBalancerEnabled(value) }
         .onChange(of: autoSwitch) { _, value in onSetAutoSwitch(value) }
         .onChange(of: preferEarlierReset) { _, value in onSetPreferEarlierReset(value) }
@@ -2160,6 +2372,7 @@ final class UsageController: ObservableObject {
     @Published private(set) var accounts: [CodexAccountUsage] = []
     @Published private(set) var usageHistory: [UsageHistorySample] = UsageHistoryStore.load()
     @Published private(set) var activityDays: [UsageHistoryDay] = []
+    @Published private(set) var sessionStatus = CodexSessionStatus(count: 0, sampledAt: Date())
     @Published private(set) var updatedAt = Date()
     @Published private(set) var isRefreshing = false
     @Published private(set) var lastError: String?
@@ -2192,6 +2405,13 @@ final class UsageController: ObservableObject {
         } catch {
             self.lastError = error.localizedDescription
         }
+    }
+
+    func refreshSessionStatus() async {
+        let status = await Task.detached {
+            CodexSessionMonitor.load()
+        }.value
+        self.sessionStatus = status
     }
 
     func switchToAccount(named name: String) async {
