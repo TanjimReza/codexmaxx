@@ -84,6 +84,17 @@ enum LoadBalancerStrategy: String, Codable, CaseIterable, Sendable {
             return "Round Robin"
         }
     }
+
+    var description: String {
+        switch self {
+        case .capacityWeighted:
+            return "Pick accounts with the most usable capacity more often."
+        case .usageWeighted:
+            return "Prefer the least-used account that still has capacity."
+        case .roundRobin:
+            return "Cycle through available accounts in order."
+        }
+    }
 }
 
 enum UsageWindowKind: Hashable, Sendable {
@@ -567,8 +578,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             let window = NSWindow(contentViewController: host)
             window.title = "\(AppInfo.displayName) Settings"
             window.styleMask = [.titled, .closable, .miniaturizable]
-            window.setContentSize(NSSize(width: 440, height: 560))
-            window.minSize = NSSize(width: 400, height: 500)
+            window.setContentSize(NSSize(width: 520, height: 700))
+            window.minSize = NSSize(width: 480, height: 620)
             window.center()
             self.settingsWindowHost = host
             self.settingsWindowController = NSWindowController(window: window)
@@ -1127,18 +1138,38 @@ struct SettingsWindowContent: View {
 
             Section("Load Balancer") {
                 Toggle("Enabled", isOn: $loadBalancerEnabled)
-                Toggle("Auto switch when wasted", isOn: $autoSwitch)
-                Toggle("Prefer earlier weekly reset", isOn: $preferEarlierReset)
-                Picker("Strategy", selection: $strategy) {
-                    ForEach(LoadBalancerStrategy.allCases, id: \.rawValue) { value in
-                        Text(value.title).tag(value)
+
+                Toggle(isOn: $autoSwitch) {
+                    SettingsHelpLabel(
+                        title: "Auto switch when wasted",
+                        help: "When the active Codex account has no useful capacity left, CodexMaxx switches to the best available account during refresh.")
+                }
+
+                Toggle(isOn: $preferEarlierReset) {
+                    SettingsHelpLabel(
+                        title: "Prefer earlier weekly reset",
+                        help: "When two accounts are similarly good, prefer the one whose weekly limit resets sooner.")
+                }
+
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("Strategy")
+                        .font(.subheadline.weight(.medium))
+
+                    VStack(spacing: 8) {
+                        ForEach(LoadBalancerStrategy.allCases, id: \.rawValue) { value in
+                            StrategyRadioRow(
+                                strategy: value,
+                                selected: strategy == value,
+                                onSelect: { strategy = value })
+                        }
                     }
                 }
+                .padding(.top, 4)
             }
         }
         .formStyle(.grouped)
         .padding(20)
-        .frame(minWidth: 400, minHeight: 500)
+        .frame(minWidth: 480, minHeight: 660)
         .onChange(of: source) { _, value in onSetStatsSource(value) }
         .onChange(of: windows) { _, value in onSetWindows(value) }
         .onChange(of: labels) { _, value in onSetLabels(value) }
@@ -1149,6 +1180,63 @@ struct SettingsWindowContent: View {
         .onChange(of: autoSwitch) { _, value in onSetAutoSwitch(value) }
         .onChange(of: preferEarlierReset) { _, value in onSetPreferEarlierReset(value) }
         .onChange(of: strategy) { _, value in onSetStrategy(value) }
+    }
+}
+
+struct SettingsHelpLabel: View {
+    let title: String
+    let help: String
+
+    var body: some View {
+        HStack(spacing: 6) {
+            Text(title)
+            Image(systemName: "info.circle")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .help(help)
+                .accessibilityLabel("\(title) info")
+        }
+        .help(help)
+    }
+}
+
+struct StrategyRadioRow: View {
+    let strategy: LoadBalancerStrategy
+    let selected: Bool
+    let onSelect: () -> Void
+
+    var body: some View {
+        Button(action: onSelect) {
+            HStack(alignment: .top, spacing: 10) {
+                Image(systemName: selected ? "largecircle.fill.circle" : "circle")
+                    .font(.system(size: 15, weight: .medium))
+                    .foregroundStyle(selected ? Color.accentColor : Color(nsColor: .secondaryLabelColor))
+                    .frame(width: 18, height: 18)
+
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(strategy.title)
+                        .font(.subheadline.weight(.semibold))
+                        .foregroundStyle(.primary)
+                    Text(strategy.description)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+
+                Spacer(minLength: 8)
+            }
+            .padding(10)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .contentShape(RoundedRectangle(cornerRadius: 8))
+            .background(
+                selected ? Color.accentColor.opacity(0.10) : Color.secondary.opacity(0.06),
+                in: RoundedRectangle(cornerRadius: 8))
+            .overlay {
+                RoundedRectangle(cornerRadius: 8)
+                    .stroke(selected ? Color.accentColor.opacity(0.45) : Color.secondary.opacity(0.18), lineWidth: 1)
+            }
+        }
+        .buttonStyle(.plain)
     }
 }
 
