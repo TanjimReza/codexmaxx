@@ -91,6 +91,12 @@ enum UsageWindowKind: Hashable, Sendable {
     case week
 }
 
+enum AppInfo {
+    static var displayName: String {
+        Bundle.main.object(forInfoDictionaryKey: "CFBundleDisplayName") as? String ?? "CodexMaxx"
+    }
+}
+
 struct LoadBalancerSettings: Codable, Sendable {
     var enabled: Bool
     var autoSwitchWhenWasted: Bool
@@ -443,7 +449,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         update.target = self
         menu.addItem(update)
 
-        let quit = NSMenuItem(title: "Quit CodexMaxx", action: #selector(quit), keyEquivalent: "q")
+        let quit = NSMenuItem(title: "Quit \(AppInfo.displayName)", action: #selector(quit), keyEquivalent: "q")
         quit.target = self
         menu.addItem(quit)
         return menu
@@ -526,7 +532,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         if self.mainWindowController == nil {
             let host = NSHostingController(rootView: self.makeMainWindowContent())
             let window = NSWindow(contentViewController: host)
-            window.title = "CodexMaxx"
+            window.title = AppInfo.displayName
             window.styleMask = [.titled, .closable, .miniaturizable, .resizable]
             window.setContentSize(NSSize(width: 760, height: 560))
             window.minSize = NSSize(width: 640, height: 440)
@@ -547,7 +553,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         if self.settingsWindowController == nil {
             let host = NSHostingController(rootView: self.makeSettingsWindowContent())
             let window = NSWindow(contentViewController: host)
-            window.title = "CodexMaxx Settings"
+            window.title = "\(AppInfo.displayName) Settings"
             window.styleMask = [.titled, .closable, .miniaturizable]
             window.setContentSize(NSSize(width: 440, height: 560))
             window.minSize = NSSize(width: 400, height: 500)
@@ -661,6 +667,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private func makeMainWindowContent() -> MainWindowContent {
         MainWindowContent(
+            appName: AppInfo.displayName,
             controller: self.controller,
             settings: self.settings,
             loadBalancerSettings: self.loadBalancerSettings,
@@ -764,6 +771,7 @@ struct MenuContent: View {
 }
 
 struct MainWindowContent: View {
+    let appName: String
     @ObservedObject var controller: UsageController
     let settings: DisplaySettings
     let loadBalancerSettings: LoadBalancerSettings
@@ -777,7 +785,7 @@ struct MainWindowContent: View {
         VStack(spacing: 0) {
             HStack(alignment: .center, spacing: 12) {
                 VStack(alignment: .leading, spacing: 3) {
-                    Text("CodexMaxx")
+                    Text(appName)
                         .font(.title2.weight(.semibold))
                     Text(self.subtitle)
                         .font(.caption)
@@ -1522,6 +1530,13 @@ enum CodexLoadBalancer {
 }
 
 enum CodexProfileStore {
+    private static var stableManagedRoot: URL {
+        FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent(".codexmaxx")
+    }
+    private static var stableCodexProfilesRoot: URL {
+        Self.stableManagedRoot.appendingPathComponent("profiles/codex")
+    }
     private static var managedRoot: URL {
         FileManager.default.homeDirectoryForCurrentUser
             .appendingPathComponent(Self.isDevVariant ? ".codexmaxx-dev" : ".codexmaxx")
@@ -1551,12 +1566,10 @@ enum CodexProfileStore {
     static func loadProfiles() throws -> [CodexProfile] {
         let root = Self.codexProfilesRoot
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        try Self.seedDevProfilesFromStableIfNeeded()
         let config = (try? Self.loadConfig()) ?? CodexMaxxConfig.empty
         let active = Self.activeProfileName()
-        let urls = try FileManager.default.contentsOfDirectory(
-            at: root,
-            includingPropertiesForKeys: [.isDirectoryKey],
-            options: [.skipsHiddenFiles])
+        let urls = Self.profileURLs(in: root)
 
         return urls.compactMap { url in
             guard (try? url.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) == true else { return nil }
@@ -1635,6 +1648,45 @@ enum CodexProfileStore {
         try Self.saveConfig(config)
     }
 
+    private static func seedDevProfilesFromStableIfNeeded() throws {
+        guard Self.isDevVariant else { return }
+        guard Self.profileURLs(in: Self.codexProfilesRoot).isEmpty else { return }
+
+        let sourceProfiles = Self.profileURLs(in: Self.stableCodexProfilesRoot)
+        guard !sourceProfiles.isEmpty else { return }
+
+        try FileManager.default.createDirectory(at: Self.codexProfilesRoot, withIntermediateDirectories: true)
+        for source in sourceProfiles {
+            let destination = Self.codexProfilesRoot.appendingPathComponent(source.lastPathComponent)
+            guard !FileManager.default.fileExists(atPath: destination.path) else { continue }
+            try FileManager.default.copyItem(at: source, to: destination)
+        }
+
+        let stableConfigURL = Self.stableManagedRoot.appendingPathComponent("config.json")
+        let stableConfig = (try? Self.loadConfig(from: stableConfigURL)) ?? .empty
+        var config = (try? Self.loadConfig()) ?? .empty
+        for (name, profile) in stableConfig.profiles where config.profiles[name] == nil {
+            config.profiles[name] = profile
+        }
+        if config.active == nil {
+            config.active = stableConfig.active
+        }
+        try Self.saveConfig(config)
+    }
+
+    private static func profileURLs(in root: URL) -> [URL] {
+        guard let urls = try? FileManager.default.contentsOfDirectory(
+            at: root,
+            includingPropertiesForKeys: [.isDirectoryKey],
+            options: [.skipsHiddenFiles])
+        else { return [] }
+
+        return urls.filter { url in
+            (try? url.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) == true
+                && FileManager.default.fileExists(atPath: url.appendingPathComponent("auth.json").path)
+        }
+    }
+
     private static func backupLiveCodexHome() throws {
         let stamp = ISO8601DateFormatter()
             .string(from: Date())
@@ -1676,6 +1728,10 @@ enum CodexProfileStore {
 
     private static func loadConfig() throws -> CodexMaxxConfig {
         let url = Self.managedRoot.appendingPathComponent("config.json")
+        return try Self.loadConfig(from: url)
+    }
+
+    private static func loadConfig(from url: URL) throws -> CodexMaxxConfig {
         let data = try Data(contentsOf: url)
         return try JSONDecoder().decode(CodexMaxxConfig.self, from: data)
     }
