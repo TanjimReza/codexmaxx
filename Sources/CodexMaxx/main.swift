@@ -319,11 +319,13 @@ enum MenuBarIconRenderer {
 struct CodexMaxxApp {
     static func main() {
         let app = NSApplication.shared
-        app.setActivationPolicy(.accessory)
+        app.setActivationPolicy(.regular)
         let delegate = AppDelegate()
         app.delegate = delegate
-        _ = delegate
-        app.run()
+        delegate.start()
+        withExtendedLifetime(delegate) {
+            app.run()
+        }
     }
 }
 
@@ -337,15 +339,25 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var mainWindowHost: NSHostingController<MainWindowContent>?
     private var settingsWindowController: NSWindowController?
     private var settingsWindowHost: NSHostingController<SettingsWindowContent>?
+    private var didStart = false
     private lazy var updaterController = SPUStandardUpdaterController(
         startingUpdater: true,
         updaterDelegate: nil,
         userDriverDelegate: nil)
 
     func applicationDidFinishLaunching(_: Notification) {
+        self.start()
+    }
+
+    func start() {
+        guard !self.didStart else { return }
+        self.didStart = true
         self.statusItem.button?.title = "..."
         self.statusItem.button?.font = .monospacedDigitSystemFont(ofSize: 12, weight: .medium)
         self.statusItem.menu = self.makeMenu()
+        DispatchQueue.main.async {
+            self.showMainWindow()
+        }
         Task { await self.refreshAndRender() }
         Timer.scheduledTimer(withTimeInterval: 120, repeats: true) { [weak self] _ in
             Task { @MainActor in
@@ -832,12 +844,18 @@ struct MainWindowContent: View {
                         VStack(alignment: .leading, spacing: 10) {
                             Text("Accounts")
                                 .font(.headline)
-                            ForEach(controller.accounts) { account in
-                                MainAccountCard(
-                                    account: account,
-                                    settings: settings,
-                                    onSwitch: onSwitch,
-                                    onEdit: onEdit)
+                            LazyVGrid(
+                                columns: [GridItem(.adaptive(minimum: 240, maximum: 360), spacing: 14, alignment: .top)],
+                                alignment: .leading,
+                                spacing: 14)
+                            {
+                                ForEach(controller.accounts) { account in
+                                    MainAccountCard(
+                                        account: account,
+                                        settings: settings,
+                                        onSwitch: onSwitch,
+                                        onEdit: onEdit)
+                                }
                             }
                         }
                     }
@@ -940,10 +958,9 @@ struct MainAccountCard: View {
             }
 
             if let snapshot = account.snapshot {
-                UsageBars(snapshot: snapshot, dimmed: account.isWasted, combined: false, settings: settings, forceInline: true)
-                VStack(alignment: .leading, spacing: 5) {
-                    UsageWindowDetail(title: "Session", window: snapshot.primary)
-                    UsageWindowDetail(title: "Week", window: snapshot.secondary)
+                VStack(alignment: .leading, spacing: 10) {
+                    MainUsageMetric(title: "Session", window: snapshot.primary, dimmed: account.isWasted)
+                    MainUsageMetric(title: "Week", window: snapshot.secondary, dimmed: account.isWasted)
                 }
             } else {
                 Text(account.error ?? "No usage")
@@ -959,7 +976,42 @@ struct MainAccountCard: View {
             }
         }
         .padding(14)
+        .frame(maxWidth: .infinity, minHeight: 190, alignment: .topLeading)
         .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 8))
+    }
+}
+
+struct MainUsageMetric: View {
+    let title: String
+    let window: RateWindow?
+    let dimmed: Bool
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 5) {
+            HStack(spacing: 8) {
+                Text(title)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                Spacer(minLength: 8)
+                if let window {
+                    Text(UsageText.remaining(window))
+                        .font(.system(.caption, design: .monospaced))
+                    Text(window.resetDescription ?? "reset unknown")
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                } else {
+                    Text("No data")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+            }
+
+            if let window {
+                ProgressView(value: max(0, min(100, window.remainingPercent)), total: 100)
+                    .tint(dimmed ? .gray : UsageColor.color(for: window.remainingPercent))
+            }
+        }
     }
 }
 

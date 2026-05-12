@@ -40,7 +40,6 @@ fi
   -c "Add :CFBundleShortVersionString string $VERSION" \
   -c "Add :CFBundleIconFile string $ICON_FILE" \
   -c 'Add :LSMinimumSystemVersion string 14.0' \
-  -c 'Add :LSUIElement bool true' \
   "$APP/Contents/Info.plist"
 
 /usr/libexec/PlistBuddy -c 'Clear dict' \
@@ -63,15 +62,26 @@ xattr -cr "$APP" 2>/dev/null || true
 
 clear_code_signing_xattrs() {
   xattr -cr "$APP" 2>/dev/null || true
+  local sparkle_current="$APP/Contents/Frameworks/Sparkle.framework/Versions/Current"
   if command -v SetFile >/dev/null 2>&1; then
     while IFS= read -r target; do
-      SetFile -a b "$target" 2>/dev/null || true
-    done < <(find "$APP" -xattrname com.apple.FinderInfo -print 2>/dev/null || true)
+      SetFile -a abcdeilmnstvz "$target" 2>/dev/null || true
+    done < <(
+      find "$APP" -xattrname com.apple.FinderInfo -print 2>/dev/null || true
+      if [[ -e "$sparkle_current" ]]; then
+        find "$sparkle_current" -xattrname com.apple.FinderInfo -print 2>/dev/null || true
+      fi
+    )
   fi
   while IFS= read -r target; do
     xattr -d com.apple.FinderInfo "$target" 2>/dev/null || true
     xattr -d 'com.apple.fileprovider.fpfs#P' "$target" 2>/dev/null || true
-  done < <(find "$APP" \( -xattrname com.apple.FinderInfo -o -xattrname 'com.apple.fileprovider.fpfs#P' \) -print 2>/dev/null || true)
+  done < <(
+    find "$APP" \( -xattrname com.apple.FinderInfo -o -xattrname 'com.apple.fileprovider.fpfs#P' \) -print 2>/dev/null || true
+    if [[ -e "$sparkle_current" ]]; then
+      find "$sparkle_current" \( -xattrname com.apple.FinderInfo -o -xattrname 'com.apple.fileprovider.fpfs#P' \) -print 2>/dev/null || true
+    fi
+  )
 }
 
 clear_code_signing_xattrs
