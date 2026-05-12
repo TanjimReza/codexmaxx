@@ -1,29 +1,72 @@
 import AppKit
+import Combine
 import Foundation
 import Sparkle
 import SwiftUI
 
-enum StatsSource: String, Sendable {
+enum StatsSource: String, CaseIterable, Sendable {
     case combined
     case active
+
+    var title: String {
+        switch self {
+        case .combined:
+            return "Combined"
+        case .active:
+            return "Active"
+        }
+    }
 }
 
-enum WindowSelection: String, Sendable {
+enum WindowSelection: String, CaseIterable, Sendable {
     case session
     case week
     case both
+
+    var title: String {
+        switch self {
+        case .session:
+            return "Session"
+        case .week:
+            return "Week"
+        case .both:
+            return "Both"
+        }
+    }
 }
 
-enum LabelStyle: String, Sendable {
+enum LabelStyle: String, CaseIterable, Sendable {
     case letters
     case icons
     case none
+
+    var title: String {
+        switch self {
+        case .letters:
+            return "Letters"
+        case .icons:
+            return "Icons"
+        case .none:
+            return "None"
+        }
+    }
 }
 
-enum BarLayout: String, Sendable {
+enum BarLayout: String, CaseIterable, Sendable {
     case inline
     case stacked
     case circles
+
+    var title: String {
+        switch self {
+        case .inline:
+            return "Text"
+        case .stacked:
+            return "Stack Bars"
+        case .circles:
+            return "Circle Bars"
+        }
+    }
 }
 
 enum LoadBalancerStrategy: String, Codable, CaseIterable, Sendable {
@@ -284,6 +327,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private let controller = UsageController()
     private var settings = DisplaySettings.load()
     private var loadBalancerSettings = CodexProfileStore.loadLoadBalancerSettings()
+    private var mainWindowController: NSWindowController?
+    private var mainWindowHost: NSHostingController<MainWindowContent>?
+    private var settingsWindowController: NSWindowController?
+    private var settingsWindowHost: NSHostingController<SettingsWindowContent>?
     private lazy var updaterController = SPUStandardUpdaterController(
         startingUpdater: true,
         updaterDelegate: nil,
@@ -299,6 +346,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 await self?.refreshAndRender()
             }
         }
+    }
+
+    func applicationShouldHandleReopen(_: NSApplication, hasVisibleWindows _: Bool) -> Bool {
+        self.showMainWindow()
+        return true
     }
 
     private func refreshAndRender() async {
@@ -320,6 +372,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             self.renderStatusItem(snapshot: source)
         }
         self.statusItem.menu = self.makeMenu()
+        self.updateWindowContent()
+    }
+
+    private func updateWindowContent() {
+        self.mainWindowHost?.rootView = self.makeMainWindowContent()
+        self.settingsWindowHost?.rootView = self.makeSettingsWindowContent()
     }
 
     private func renderStatusItem(snapshot: UsageSnapshot?) {
@@ -360,6 +418,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         refresh.target = self
         menu.addItem(refresh)
 
+        let openWindow = NSMenuItem(title: "Open Window", action: #selector(openMainWindow), keyEquivalent: "o")
+        openWindow.target = self
+        menu.addItem(openWindow)
+
         let add = NSMenuItem(title: "Add Current Account...", action: #selector(addCurrentAccount), keyEquivalent: "")
         add.target = self
         menu.addItem(add)
@@ -372,6 +434,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let settingsItem = NSMenuItem(title: "Settings", action: nil, keyEquivalent: "")
         settingsItem.submenu = self.makeSettingsMenu()
         menu.addItem(settingsItem)
+
+        let settingsWindow = NSMenuItem(title: "Settings Window...", action: #selector(openSettingsWindow), keyEquivalent: ",")
+        settingsWindow.target = self
+        menu.addItem(settingsWindow)
 
         let update = NSMenuItem(title: "Check for Updates...", action: #selector(checkForUpdates), keyEquivalent: "")
         update.target = self
@@ -450,6 +516,48 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             await self.controller.switchToAccount(named: name)
             self.render()
         }
+    }
+
+    @objc private func openMainWindow() {
+        self.showMainWindow()
+    }
+
+    private func showMainWindow() {
+        if self.mainWindowController == nil {
+            let host = NSHostingController(rootView: self.makeMainWindowContent())
+            let window = NSWindow(contentViewController: host)
+            window.title = "CodexMaxx"
+            window.styleMask = [.titled, .closable, .miniaturizable, .resizable]
+            window.setContentSize(NSSize(width: 760, height: 560))
+            window.minSize = NSSize(width: 640, height: 440)
+            window.center()
+            self.mainWindowHost = host
+            self.mainWindowController = NSWindowController(window: window)
+        }
+        self.updateWindowContent()
+        self.mainWindowController?.showWindow(nil)
+        NSApp.activate(ignoringOtherApps: true)
+    }
+
+    @objc private func openSettingsWindow() {
+        self.showSettingsWindow()
+    }
+
+    private func showSettingsWindow() {
+        if self.settingsWindowController == nil {
+            let host = NSHostingController(rootView: self.makeSettingsWindowContent())
+            let window = NSWindow(contentViewController: host)
+            window.title = "CodexMaxx Settings"
+            window.styleMask = [.titled, .closable, .miniaturizable]
+            window.setContentSize(NSSize(width: 440, height: 560))
+            window.minSize = NSSize(width: 400, height: 500)
+            window.center()
+            self.settingsWindowHost = host
+            self.settingsWindowController = NSWindowController(window: window)
+        }
+        self.updateWindowContent()
+        self.settingsWindowController?.showWindow(nil)
+        NSApp.activate(ignoringOtherApps: true)
     }
 
     @objc private func balanceNow() {
@@ -551,6 +659,41 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
+    private func makeMainWindowContent() -> MainWindowContent {
+        MainWindowContent(
+            controller: self.controller,
+            settings: self.settings,
+            loadBalancerSettings: self.loadBalancerSettings,
+            onRefresh: { [weak self] in
+                Task { @MainActor in await self?.refreshAndRender() }
+            },
+            onBalance: { [weak self] in
+                Task { @MainActor in
+                    await self?.controller.balanceNow(settings: self?.loadBalancerSettings ?? .disabled)
+                    self?.render()
+                }
+            },
+            onSwitch: { [weak self] name in self?.switchAccount(named: name) },
+            onEdit: { [weak self] account in self?.editAccount(account) },
+            onOpenSettings: { [weak self] in self?.showSettingsWindow() })
+    }
+
+    private func makeSettingsWindowContent() -> SettingsWindowContent {
+        SettingsWindowContent(
+            displaySettings: self.settings,
+            loadBalancerSettings: self.loadBalancerSettings,
+            onSetStatsSource: { [weak self] value in self?.updateSettings { $0.source = value } },
+            onSetWindows: { [weak self] value in self?.updateSettings { $0.windows = value } },
+            onSetLabels: { [weak self] value in self?.updateSettings { $0.labels = value } },
+            onSetLayout: { [weak self] value in self?.updateSettings { $0.layout = value } },
+            onSetShowNumbers: { [weak self] value in self?.updateSettings { $0.showNumbers = value } },
+            onSetShowEmails: { [weak self] value in self?.updateSettings { $0.showEmails = value } },
+            onSetLoadBalancerEnabled: { [weak self] value in self?.updateLoadBalancerSettings { $0.enabled = value } },
+            onSetAutoSwitch: { [weak self] value in self?.updateLoadBalancerSettings { $0.autoSwitchWhenWasted = value } },
+            onSetPreferEarlierReset: { [weak self] value in self?.updateLoadBalancerSettings { $0.preferEarlierReset = value } },
+            onSetStrategy: { [weak self] value in self?.updateLoadBalancerSettings { $0.strategy = value } })
+    }
+
     @objc private func quit() {
         NSApplication.shared.terminate(nil)
     }
@@ -569,7 +712,7 @@ final class HostingMenuView<Content: View>: NSHostingView<Content> {
 }
 
 struct MenuContent: View {
-    let controller: UsageController
+    @ObservedObject var controller: UsageController
     let settings: DisplaySettings
     let onSwitch: (String) -> Void
     let onEdit: (CodexAccountUsage) -> Void
@@ -617,6 +760,335 @@ struct MenuContent: View {
         .padding(.horizontal, 12)
         .padding(.bottom, 4)
         .frame(width: 320, alignment: .leading)
+    }
+}
+
+struct MainWindowContent: View {
+    @ObservedObject var controller: UsageController
+    let settings: DisplaySettings
+    let loadBalancerSettings: LoadBalancerSettings
+    let onRefresh: () -> Void
+    let onBalance: () -> Void
+    let onSwitch: (String) -> Void
+    let onEdit: (CodexAccountUsage) -> Void
+    let onOpenSettings: () -> Void
+
+    var body: some View {
+        VStack(spacing: 0) {
+            HStack(alignment: .center, spacing: 12) {
+                VStack(alignment: .leading, spacing: 3) {
+                    Text("CodexMaxx")
+                        .font(.title2.weight(.semibold))
+                    Text(self.subtitle)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+                Spacer()
+                Button(action: onRefresh) {
+                    Label("Refresh", systemImage: "arrow.clockwise")
+                }
+                .disabled(controller.isRefreshing)
+                Button(action: onBalance) {
+                    Label("Balance", systemImage: "arrow.triangle.2.circlepath")
+                }
+                .disabled(!loadBalancerSettings.enabled || controller.accounts.isEmpty)
+                Button(action: onOpenSettings) {
+                    Label("Settings", systemImage: "gearshape")
+                }
+            }
+            .padding(.horizontal, 20)
+            .padding(.vertical, 16)
+
+            Divider()
+
+            ScrollView {
+                VStack(alignment: .leading, spacing: 16) {
+                    if let error = controller.lastError {
+                        Text(error)
+                            .font(.callout)
+                            .foregroundStyle(.red)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                    }
+
+                    HStack(alignment: .top, spacing: 14) {
+                        SummaryPanel(title: "Accounts", value: "\(controller.accounts.count)", detail: self.activeAccountName)
+                        SummaryPanel(title: "Load Balancer", value: loadBalancerSettings.enabled ? "On" : "Off", detail: loadBalancerSettings.strategy.title)
+                        if let combined = UsageMath.combined(controller.accounts.map(\.snapshot)) {
+                            SummaryUsagePanel(snapshot: combined)
+                        }
+                    }
+
+                    if controller.accounts.isEmpty {
+                        EmptyAccountsPanel()
+                    } else {
+                        VStack(alignment: .leading, spacing: 10) {
+                            Text("Accounts")
+                                .font(.headline)
+                            ForEach(controller.accounts) { account in
+                                MainAccountCard(
+                                    account: account,
+                                    settings: settings,
+                                    onSwitch: onSwitch,
+                                    onEdit: onEdit)
+                            }
+                        }
+                    }
+                }
+                .padding(20)
+            }
+        }
+        .frame(minWidth: 640, minHeight: 440)
+    }
+
+    private var subtitle: String {
+        if controller.isRefreshing {
+            return "Refreshing..."
+        }
+        return "Updated \(UsageText.time(controller.updatedAt))"
+    }
+
+    private var activeAccountName: String {
+        controller.accounts.first(where: \.active)?.displayName ?? "No active account"
+    }
+}
+
+struct SummaryPanel: View {
+    let title: String
+    let value: String
+    let detail: String
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 5) {
+            Text(title)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            Text(value)
+                .font(.title3.weight(.semibold))
+            Text(detail)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(14)
+        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 8))
+    }
+}
+
+struct SummaryUsagePanel: View {
+    let snapshot: UsageSnapshot
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("Combined")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            UsageBars(snapshot: snapshot, dimmed: false, combined: true, settings: .popup, forceInline: true)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(14)
+        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 8))
+    }
+}
+
+struct EmptyAccountsPanel: View {
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text("No stored Codex profiles")
+                .font(.headline)
+            Text("Use the menu bar item to add the currently active Codex account.")
+                .foregroundStyle(.secondary)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(16)
+        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 8))
+    }
+}
+
+struct MainAccountCard: View {
+    let account: CodexAccountUsage
+    let settings: DisplaySettings
+    let onSwitch: (String) -> Void
+    let onEdit: (CodexAccountUsage) -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack(alignment: .firstTextBaseline, spacing: 10) {
+                Image(systemName: account.active ? "checkmark.circle.fill" : "circle")
+                    .foregroundStyle(account.active ? .green : .secondary)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(account.displayName)
+                        .font(.headline)
+                    if settings.showEmails, !account.emailOrPlan.isEmpty {
+                        Text(account.emailOrPlan)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+                Spacer()
+                Text(account.statusText)
+                    .font(.system(.caption, design: .monospaced))
+                    .foregroundStyle(account.isWasted ? .secondary : .primary)
+            }
+
+            if let snapshot = account.snapshot {
+                UsageBars(snapshot: snapshot, dimmed: account.isWasted, combined: false, settings: settings, forceInline: true)
+                VStack(alignment: .leading, spacing: 5) {
+                    UsageWindowDetail(title: "Session", window: snapshot.primary)
+                    UsageWindowDetail(title: "Week", window: snapshot.secondary)
+                }
+            } else {
+                Text(account.error ?? "No usage")
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+            }
+
+            HStack {
+                Button("Switch") { onSwitch(account.name) }
+                    .disabled(account.active)
+                Button("Edit") { onEdit(account) }
+                Spacer()
+            }
+        }
+        .padding(14)
+        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 8))
+    }
+}
+
+struct UsageWindowDetail: View {
+    let title: String
+    let window: RateWindow?
+
+    var body: some View {
+        HStack {
+            Text(title)
+                .foregroundStyle(.secondary)
+                .frame(width: 58, alignment: .leading)
+            if let window {
+                Text("\(Int(window.remainingPercent.rounded()))% remaining")
+                Spacer()
+                Text(window.resetDescription ?? "reset unknown")
+                    .foregroundStyle(.secondary)
+            } else {
+                Text("No data")
+                    .foregroundStyle(.secondary)
+                Spacer()
+            }
+        }
+        .font(.caption)
+    }
+}
+
+struct SettingsWindowContent: View {
+    @State private var source: StatsSource
+    @State private var windows: WindowSelection
+    @State private var labels: LabelStyle
+    @State private var layout: BarLayout
+    @State private var showNumbers: Bool
+    @State private var showEmails: Bool
+    @State private var loadBalancerEnabled: Bool
+    @State private var autoSwitch: Bool
+    @State private var preferEarlierReset: Bool
+    @State private var strategy: LoadBalancerStrategy
+
+    let onSetStatsSource: (StatsSource) -> Void
+    let onSetWindows: (WindowSelection) -> Void
+    let onSetLabels: (LabelStyle) -> Void
+    let onSetLayout: (BarLayout) -> Void
+    let onSetShowNumbers: (Bool) -> Void
+    let onSetShowEmails: (Bool) -> Void
+    let onSetLoadBalancerEnabled: (Bool) -> Void
+    let onSetAutoSwitch: (Bool) -> Void
+    let onSetPreferEarlierReset: (Bool) -> Void
+    let onSetStrategy: (LoadBalancerStrategy) -> Void
+
+    init(
+        displaySettings: DisplaySettings,
+        loadBalancerSettings: LoadBalancerSettings,
+        onSetStatsSource: @escaping (StatsSource) -> Void,
+        onSetWindows: @escaping (WindowSelection) -> Void,
+        onSetLabels: @escaping (LabelStyle) -> Void,
+        onSetLayout: @escaping (BarLayout) -> Void,
+        onSetShowNumbers: @escaping (Bool) -> Void,
+        onSetShowEmails: @escaping (Bool) -> Void,
+        onSetLoadBalancerEnabled: @escaping (Bool) -> Void,
+        onSetAutoSwitch: @escaping (Bool) -> Void,
+        onSetPreferEarlierReset: @escaping (Bool) -> Void,
+        onSetStrategy: @escaping (LoadBalancerStrategy) -> Void)
+    {
+        self._source = State(initialValue: displaySettings.source)
+        self._windows = State(initialValue: displaySettings.windows)
+        self._labels = State(initialValue: displaySettings.labels)
+        self._layout = State(initialValue: displaySettings.layout)
+        self._showNumbers = State(initialValue: displaySettings.showNumbers)
+        self._showEmails = State(initialValue: displaySettings.showEmails)
+        self._loadBalancerEnabled = State(initialValue: loadBalancerSettings.enabled)
+        self._autoSwitch = State(initialValue: loadBalancerSettings.autoSwitchWhenWasted)
+        self._preferEarlierReset = State(initialValue: loadBalancerSettings.preferEarlierReset)
+        self._strategy = State(initialValue: loadBalancerSettings.strategy)
+        self.onSetStatsSource = onSetStatsSource
+        self.onSetWindows = onSetWindows
+        self.onSetLabels = onSetLabels
+        self.onSetLayout = onSetLayout
+        self.onSetShowNumbers = onSetShowNumbers
+        self.onSetShowEmails = onSetShowEmails
+        self.onSetLoadBalancerEnabled = onSetLoadBalancerEnabled
+        self.onSetAutoSwitch = onSetAutoSwitch
+        self.onSetPreferEarlierReset = onSetPreferEarlierReset
+        self.onSetStrategy = onSetStrategy
+    }
+
+    var body: some View {
+        Form {
+            Section("Menu Bar") {
+                Picker("Stats", selection: $source) {
+                    ForEach(StatsSource.allCases, id: \.rawValue) { value in
+                        Text(value.title).tag(value)
+                    }
+                }
+                Picker("Windows", selection: $windows) {
+                    ForEach(WindowSelection.allCases, id: \.rawValue) { value in
+                        Text(value.title).tag(value)
+                    }
+                }
+                Picker("Labels", selection: $labels) {
+                    ForEach(LabelStyle.allCases, id: \.rawValue) { value in
+                        Text(value.title).tag(value)
+                    }
+                }
+                Picker("Layout", selection: $layout) {
+                    ForEach(BarLayout.allCases, id: \.rawValue) { value in
+                        Text(value.title).tag(value)
+                    }
+                }
+                Toggle("Show numbers", isOn: $showNumbers)
+                Toggle("Show emails", isOn: $showEmails)
+            }
+
+            Section("Load Balancer") {
+                Toggle("Enabled", isOn: $loadBalancerEnabled)
+                Toggle("Auto switch when wasted", isOn: $autoSwitch)
+                Toggle("Prefer earlier weekly reset", isOn: $preferEarlierReset)
+                Picker("Strategy", selection: $strategy) {
+                    ForEach(LoadBalancerStrategy.allCases, id: \.rawValue) { value in
+                        Text(value.title).tag(value)
+                    }
+                }
+            }
+        }
+        .formStyle(.grouped)
+        .padding(20)
+        .frame(minWidth: 400, minHeight: 500)
+        .onChange(of: source) { _, value in onSetStatsSource(value) }
+        .onChange(of: windows) { _, value in onSetWindows(value) }
+        .onChange(of: labels) { _, value in onSetLabels(value) }
+        .onChange(of: layout) { _, value in onSetLayout(value) }
+        .onChange(of: showNumbers) { _, value in onSetShowNumbers(value) }
+        .onChange(of: showEmails) { _, value in onSetShowEmails(value) }
+        .onChange(of: loadBalancerEnabled) { _, value in onSetLoadBalancerEnabled(value) }
+        .onChange(of: autoSwitch) { _, value in onSetAutoSwitch(value) }
+        .onChange(of: preferEarlierReset) { _, value in onSetPreferEarlierReset(value) }
+        .onChange(of: strategy) { _, value in onSetStrategy(value) }
     }
 }
 
@@ -777,11 +1249,11 @@ struct VisibleUsageBar: Identifiable {
 }
 
 @MainActor
-final class UsageController {
-    private(set) var accounts: [CodexAccountUsage] = []
-    private(set) var updatedAt = Date()
-    private(set) var isRefreshing = false
-    private(set) var lastError: String?
+final class UsageController: ObservableObject {
+    @Published private(set) var accounts: [CodexAccountUsage] = []
+    @Published private(set) var updatedAt = Date()
+    @Published private(set) var isRefreshing = false
+    @Published private(set) var lastError: String?
 
     func refresh() async {
         self.isRefreshing = true
