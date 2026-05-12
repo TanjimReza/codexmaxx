@@ -806,32 +806,18 @@ struct MainWindowContent: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            HStack(alignment: .center, spacing: 12) {
-                VStack(alignment: .leading, spacing: 3) {
-                    Text(appName)
-                        .font(.title2.weight(.semibold))
-                    Text(self.subtitle)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                }
-                Spacer()
-                Button(action: onRefresh) {
-                    Label("Refresh", systemImage: "arrow.clockwise")
-                }
-                .disabled(controller.isRefreshing)
-                Button(action: onBalance) {
-                    Label("Balance", systemImage: "arrow.triangle.2.circlepath")
-                }
-                .disabled(!loadBalancerSettings.enabled || controller.accounts.isEmpty)
-                Button(action: onOpenSettings) {
-                    Label("Settings", systemImage: "gearshape")
-                }
-            }
-            .padding(.horizontal, 24)
-            .padding(.vertical, 16)
-            .background(Color(nsColor: .windowBackgroundColor))
-
-            Divider()
+            MainToolbar(
+                isRefreshing: controller.isRefreshing,
+                updatedAt: controller.updatedAt,
+                activeAccountName: self.activeAccountName,
+                hasActiveAccount: self.hasActiveAccount,
+                loadBalancerEnabled: loadBalancerSettings.enabled,
+                loadBalancerStrategyTitle: loadBalancerSettings.strategy.title,
+                accountsCount: controller.accounts.count,
+                canBalance: loadBalancerSettings.enabled && !controller.accounts.isEmpty,
+                onRefresh: onRefresh,
+                onBalance: onBalance,
+                onOpenSettings: onOpenSettings)
 
             ScrollView {
                 VStack(alignment: .leading, spacing: 24) {
@@ -887,15 +873,209 @@ struct MainWindowContent: View {
         .frame(minWidth: 800, minHeight: 600)
     }
 
-    private var subtitle: String {
-        if controller.isRefreshing {
-            return "Refreshing..."
-        }
-        return "Updated \(UsageText.time(controller.updatedAt))"
-    }
-
     private var activeAccountName: String {
         controller.accounts.first(where: \.active)?.displayName ?? "No active account"
+    }
+
+    private var hasActiveAccount: Bool {
+        controller.accounts.contains(where: \.active)
+    }
+}
+
+struct MainToolbar: View {
+    let isRefreshing: Bool
+    let updatedAt: Date
+    let activeAccountName: String
+    let hasActiveAccount: Bool
+    let loadBalancerEnabled: Bool
+    let loadBalancerStrategyTitle: String
+    let accountsCount: Int
+    let canBalance: Bool
+    let onRefresh: () -> Void
+    let onBalance: () -> Void
+    let onOpenSettings: () -> Void
+
+    var body: some View {
+        HStack(spacing: 10) {
+            ToolbarStatusChip(
+                isRefreshing: isRefreshing,
+                updatedAt: updatedAt)
+
+            ToolbarDivider()
+
+            ToolbarAccountChip(
+                name: activeAccountName,
+                isActive: hasActiveAccount,
+                accountsCount: accountsCount)
+
+            ToolbarLoadBalancerChip(
+                enabled: loadBalancerEnabled,
+                strategyTitle: loadBalancerStrategyTitle)
+
+            Spacer(minLength: 8)
+
+            HStack(spacing: 6) {
+                Button(action: onRefresh) {
+                    Label("Refresh", systemImage: "arrow.clockwise")
+                }
+                .help("Refresh usage data")
+                .disabled(isRefreshing)
+
+                Button(action: onBalance) {
+                    Label("Balance", systemImage: "arrow.triangle.2.circlepath")
+                }
+                .help("Switch to the optimal account now")
+                .disabled(!canBalance)
+            }
+            .buttonStyle(ToolbarActionButtonStyle())
+
+            ToolbarDivider()
+
+            Button(action: onOpenSettings) {
+                Image(systemName: "gearshape")
+                    .font(.system(size: 13, weight: .medium))
+                    .frame(width: 22, height: 22)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(ToolbarIconButtonStyle())
+            .help("Open settings")
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 7)
+        .frame(minHeight: 38)
+        .background(.bar)
+        .overlay(alignment: .bottom) {
+            Rectangle()
+                .fill(Color.primary.opacity(0.08))
+                .frame(height: 1)
+        }
+    }
+}
+
+private struct ToolbarStatusChip: View {
+    let isRefreshing: Bool
+    let updatedAt: Date
+
+    var body: some View {
+        HStack(spacing: 6) {
+            if isRefreshing {
+                ProgressView()
+                    .controlSize(.mini)
+                    .scaleEffect(0.6)
+                    .frame(width: 10, height: 10)
+                Text("Refreshing")
+                    .font(.system(size: 11, weight: .medium))
+                    .foregroundStyle(.secondary)
+            } else {
+                Circle()
+                    .fill(Color.green)
+                    .frame(width: 6, height: 6)
+                Text("Updated \(UsageText.time(updatedAt))")
+                    .font(.system(size: 11, weight: .medium))
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+            }
+        }
+        .fixedSize()
+    }
+}
+
+private struct ToolbarAccountChip: View {
+    let name: String
+    let isActive: Bool
+    let accountsCount: Int
+
+    var body: some View {
+        HStack(spacing: 6) {
+            Image(systemName: "person.crop.circle.fill")
+                .font(.system(size: 12))
+                .foregroundStyle(isActive ? Color.accentColor : Color.secondary)
+            Text(name)
+                .font(.system(size: 11, weight: .medium))
+                .foregroundStyle(.primary)
+                .lineLimit(1)
+                .truncationMode(.middle)
+            if accountsCount > 1 {
+                Text("\(accountsCount)")
+                    .font(.system(size: 10, weight: .semibold).monospacedDigit())
+                    .foregroundStyle(.secondary)
+                    .padding(.horizontal, 5)
+                    .padding(.vertical, 1)
+                    .background(Color.primary.opacity(0.08), in: Capsule())
+            }
+        }
+        .padding(.horizontal, 8)
+        .padding(.vertical, 4)
+        .background(Color.primary.opacity(0.05), in: Capsule())
+        .overlay(Capsule().stroke(Color.primary.opacity(0.08), lineWidth: 1))
+        .frame(maxWidth: 220)
+        .fixedSize(horizontal: true, vertical: false)
+    }
+}
+
+private struct ToolbarLoadBalancerChip: View {
+    let enabled: Bool
+    let strategyTitle: String
+
+    var body: some View {
+        HStack(spacing: 5) {
+            Image(systemName: "scale.3d")
+                .font(.system(size: 11, weight: .medium))
+            Text(enabled ? strategyTitle : "Off")
+                .font(.system(size: 11, weight: .medium))
+                .lineLimit(1)
+        }
+        .foregroundStyle(enabled ? Color.accentColor : Color.secondary)
+        .padding(.horizontal, 8)
+        .padding(.vertical, 4)
+        .background(
+            (enabled ? Color.accentColor.opacity(0.10) : Color.primary.opacity(0.04)),
+            in: Capsule())
+        .overlay(
+            Capsule().stroke(
+                enabled ? Color.accentColor.opacity(0.25) : Color.primary.opacity(0.08),
+                lineWidth: 1))
+        .help(enabled ? "Load balancer: \(strategyTitle)" : "Load balancer is off")
+        .fixedSize()
+    }
+}
+
+private struct ToolbarDivider: View {
+    var body: some View {
+        Rectangle()
+            .fill(Color.primary.opacity(0.12))
+            .frame(width: 1, height: 16)
+            .padding(.horizontal, 2)
+    }
+}
+
+private struct ToolbarActionButtonStyle: ButtonStyle {
+    @Environment(\.isEnabled) private var isEnabled
+
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .font(.system(size: 12, weight: .medium))
+            .foregroundStyle(isEnabled ? Color.primary : Color.secondary.opacity(0.65))
+            .labelStyle(.titleAndIcon)
+            .padding(.horizontal, 9)
+            .padding(.vertical, 4)
+            .background(
+                RoundedRectangle(cornerRadius: 6, style: .continuous)
+                    .fill(configuration.isPressed ? Color.primary.opacity(0.12) : Color.primary.opacity(0.055)))
+            .overlay(
+                RoundedRectangle(cornerRadius: 6, style: .continuous)
+                    .stroke(Color.primary.opacity(isEnabled ? 0.10 : 0.06), lineWidth: 1))
+            .opacity(isEnabled ? 1 : 0.52)
+    }
+}
+
+private struct ToolbarIconButtonStyle: ButtonStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .foregroundStyle(.secondary)
+            .background(
+                RoundedRectangle(cornerRadius: 6, style: .continuous)
+                    .fill(configuration.isPressed ? Color.primary.opacity(0.10) : Color.clear))
     }
 }
 
