@@ -556,7 +556,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             let host = NSHostingController(rootView: self.makeMainWindowContent())
             let window = NSWindow(contentViewController: host)
             window.title = AppInfo.displayName
-            window.styleMask = [.titled, .closable, .miniaturizable, .resizable]
+            window.styleMask = [.titled, .closable, .miniaturizable, .resizable, .fullSizeContentView]
+            window.titleVisibility = .hidden
+            window.titlebarAppearsTransparent = true
+            window.isMovableByWindowBackground = true
+            window.backgroundColor = .underPageBackgroundColor
             window.setContentSize(NSSize(width: 800, height: 600))
             window.minSize = NSSize(width: 760, height: 500)
             window.center()
@@ -813,7 +817,6 @@ struct MainWindowContent: View {
                 hasActiveAccount: self.hasActiveAccount,
                 loadBalancerEnabled: loadBalancerSettings.enabled,
                 loadBalancerStrategyTitle: loadBalancerSettings.strategy.title,
-                accountsCount: controller.accounts.count,
                 canBalance: loadBalancerSettings.enabled && !controller.accounts.isEmpty,
                 onRefresh: onRefresh,
                 onBalance: onBalance,
@@ -839,8 +842,8 @@ struct MainWindowContent: View {
                         }
 
                         HStack(alignment: .top, spacing: 16) {
-                            WeeklyUsageWidget(accounts: controller.accounts, samples: controller.usageHistory)
-                            ActivityGraphWidget(accounts: controller.accounts, samples: controller.usageHistory)
+                            WeeklyUsageWidget(accounts: controller.accounts, days: controller.activityDays)
+                            ActivityGraphWidget(days: controller.activityDays)
                         }
                     }
 
@@ -889,7 +892,6 @@ struct MainToolbar: View {
     let hasActiveAccount: Bool
     let loadBalancerEnabled: Bool
     let loadBalancerStrategyTitle: String
-    let accountsCount: Int
     let canBalance: Bool
     let onRefresh: () -> Void
     let onBalance: () -> Void
@@ -905,8 +907,7 @@ struct MainToolbar: View {
 
             ToolbarAccountChip(
                 name: activeAccountName,
-                isActive: hasActiveAccount,
-                accountsCount: accountsCount)
+                isActive: hasActiveAccount)
 
             ToolbarLoadBalancerChip(
                 enabled: loadBalancerEnabled,
@@ -920,12 +921,14 @@ struct MainToolbar: View {
                 }
                 .help("Refresh usage data")
                 .disabled(isRefreshing)
+                .focusable(false)
 
                 Button(action: onBalance) {
                     Label("Balance", systemImage: "arrow.triangle.2.circlepath")
                 }
                 .help("Switch to the optimal account now")
                 .disabled(!canBalance)
+                .focusable(false)
             }
             .buttonStyle(ToolbarActionButtonStyle())
 
@@ -939,11 +942,13 @@ struct MainToolbar: View {
             }
             .buttonStyle(ToolbarIconButtonStyle())
             .help("Open settings")
+            .focusable(false)
         }
-        .padding(.horizontal, 12)
+        .padding(.leading, 132)
+        .padding(.trailing, 12)
         .padding(.vertical, 7)
         .frame(minHeight: 38)
-        .background(.bar)
+        .background(Color(nsColor: .underPageBackgroundColor).opacity(0.5))
         .overlay(alignment: .bottom) {
             Rectangle()
                 .fill(Color.primary.opacity(0.08))
@@ -983,7 +988,6 @@ private struct ToolbarStatusChip: View {
 private struct ToolbarAccountChip: View {
     let name: String
     let isActive: Bool
-    let accountsCount: Int
 
     var body: some View {
         HStack(spacing: 6) {
@@ -995,14 +999,6 @@ private struct ToolbarAccountChip: View {
                 .foregroundStyle(.primary)
                 .lineLimit(1)
                 .truncationMode(.middle)
-            if accountsCount > 1 {
-                Text("\(accountsCount)")
-                    .font(.system(size: 10, weight: .semibold).monospacedDigit())
-                    .foregroundStyle(.secondary)
-                    .padding(.horizontal, 5)
-                    .padding(.vertical, 1)
-                    .background(Color.primary.opacity(0.08), in: Capsule())
-            }
         }
         .padding(.horizontal, 8)
         .padding(.vertical, 4)
@@ -1097,6 +1093,7 @@ struct SummaryPanel: View {
                 .lineLimit(1)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
+        .frame(minHeight: 92, alignment: .topLeading)
         .padding(16)
         .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 12))
         .overlay(RoundedRectangle(cornerRadius: 12).stroke(Color.secondary.opacity(0.15), lineWidth: 1))
@@ -1114,6 +1111,7 @@ struct SummaryUsagePanel: View {
             UsageBars(snapshot: snapshot, dimmed: false, combined: true, settings: .popup, forceInline: true)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
+        .frame(minHeight: 92, alignment: .topLeading)
         .padding(16)
         .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 12))
         .overlay(RoundedRectangle(cornerRadius: 12).stroke(Color.secondary.opacity(0.15), lineWidth: 1))
@@ -1142,9 +1140,13 @@ struct MainAccountCard: View {
     let onEdit: (CodexAccountUsage) -> Void
     @State private var isHovered = false
 
+    private var canSelect: Bool {
+        account.isLoadBalancerAvailable
+    }
+
     var body: some View {
         Button(action: {
-            if !account.active {
+            if canSelect, !account.active {
                 onSwitch(account.name)
             }
         }) {
@@ -1202,18 +1204,19 @@ struct MainAccountCard: View {
             }
             .padding(16)
             .frame(maxWidth: .infinity, minHeight: 180, alignment: .topLeading)
-            .background(account.active ? Color.accentColor.opacity(0.08) : Color.clear, in: RoundedRectangle(cornerRadius: 12))
+            .background(account.active && canSelect ? Color.accentColor.opacity(0.08) : Color.clear, in: RoundedRectangle(cornerRadius: 12))
             .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 12))
             .overlay(
                 RoundedRectangle(cornerRadius: 12)
-                    .stroke(account.active ? Color.accentColor.opacity(0.5) : Color.secondary.opacity(0.15), lineWidth: account.active ? 2 : 1)
+                    .stroke(account.active && canSelect ? Color.accentColor.opacity(0.5) : Color.secondary.opacity(0.15), lineWidth: account.active && canSelect ? 2 : 1)
             )
         }
         .buttonStyle(.plain)
         .onHover { hovering in
-            isHovered = hovering
+            isHovered = canSelect && hovering
         }
-        .scaleEffect(isHovered && !account.active ? 1.01 : 1.0)
+        .scaleEffect(isHovered && !account.active && canSelect ? 1.01 : 1.0)
+        .opacity(canSelect ? 1 : 0.58)
         .animation(.easeOut(duration: 0.15), value: isHovered)
     }
 }
@@ -1253,11 +1256,13 @@ struct MainUsageMetric: View {
 }
 
 struct ActivityGraphWidget: View {
-    let accounts: [CodexAccountUsage]
-    let samples: [UsageHistorySample]
+    let days: [UsageHistoryDay]
 
-    private var days: [UsageHistoryDay] {
-        UsageHistoryAnalytics.days(samples: samples, accounts: accounts, count: 112)
+    private var visibleDays: [UsageHistoryDay] {
+        if days.count >= 112 {
+            return Array(days.suffix(112))
+        }
+        return UsageHistoryAnalytics.days(samples: [], accounts: [], count: 112)
     }
 
     var body: some View {
@@ -1270,7 +1275,7 @@ struct ActivityGraphWidget: View {
                 ForEach(0..<16, id: \.self) { week in
                     VStack(spacing: 4) {
                         ForEach(0..<7, id: \.self) { day in
-                            let historyDay = days[week * 7 + day]
+                            let historyDay = visibleDays[week * 7 + day]
                             RoundedRectangle(cornerRadius: 2)
                                 .fill(color(for: level(for: historyDay.total)))
                                 .frame(width: 12, height: 12)
@@ -1314,14 +1319,17 @@ struct ActivityGraphWidget: View {
 
 struct WeeklyUsageWidget: View {
     let accounts: [CodexAccountUsage]
-    let samples: [UsageHistorySample]
+    let days: [UsageHistoryDay]
 
-    private var days: [UsageHistoryDay] {
-        UsageHistoryAnalytics.days(samples: samples, accounts: accounts, count: 7)
+    private var visibleDays: [UsageHistoryDay] {
+        if days.isEmpty {
+            return UsageHistoryAnalytics.days(samples: [], accounts: [], count: 7)
+        }
+        return Array(days.suffix(7))
     }
 
     private var maxTotal: Double {
-        max(1, days.map(\.total).max() ?? 1)
+        max(1, visibleDays.map(\.total).max() ?? 1)
     }
 
     var body: some View {
@@ -1331,7 +1339,7 @@ struct WeeklyUsageWidget: View {
                 .foregroundStyle(.secondary)
 
             HStack(alignment: .bottom, spacing: 12) {
-                ForEach(days) { day in
+                ForEach(visibleDays) { day in
                     VStack(spacing: 6) {
                         if day.segments.isEmpty {
                             RoundedRectangle(cornerRadius: 3)
@@ -1488,6 +1496,206 @@ enum UsageHistoryAnalytics {
             let total = segments.map(\.amount).reduce(0, +)
             return UsageHistoryDay(date: date, segments: segments, total: total)
         }
+    }
+}
+
+private struct CachedActivityHistory: Codable {
+    var version: Int
+    var days: [CachedActivityDay]
+
+    static let currentVersion = 2
+    static let empty = CachedActivityHistory(version: currentVersion, days: [])
+}
+
+private struct CachedActivityDay: Codable {
+    let dateKey: String
+    let segments: [CachedActivitySegment]
+
+    enum CodingKeys: String, CodingKey {
+        case dateKey = "date_key"
+        case segments
+    }
+}
+
+private struct CachedActivitySegment: Codable {
+    let accountName: String
+    let amount: Double
+
+    enum CodingKeys: String, CodingKey {
+        case accountName = "account_name"
+        case amount
+    }
+}
+
+enum CodexActivityStore {
+    private static let retentionDays = 120
+
+    static func days(
+        accounts: [CodexAccountUsage],
+        count: Int = 112,
+        calendar: Calendar = .current,
+        now: Date = Date())
+        -> [UsageHistoryDay]
+    {
+        let startToday = calendar.startOfDay(for: now)
+        let requestedDates = (0..<count).compactMap {
+            calendar.date(byAdding: .day, value: -(count - 1 - $0), to: startToday)
+        }
+        let todayKey = self.key(for: startToday)
+        var cache = self.load()
+        var cachedByKey = Dictionary(uniqueKeysWithValues: cache.days.map { ($0.dateKey, $0) })
+        let requestedKeys = Set(requestedDates.map(self.key))
+        var keysToScan = Set<String>()
+
+        for date in requestedDates {
+            let key = self.key(for: date)
+            if key == todayKey || cachedByKey[key] == nil {
+                keysToScan.insert(key)
+            }
+        }
+
+        if !keysToScan.isEmpty {
+            let scanned = self.scanLocalActivity(keys: keysToScan, accounts: accounts, calendar: calendar)
+            for key in keysToScan {
+                cachedByKey[key] = self.cachedDay(dateKey: key, counts: scanned[key] ?? [:])
+            }
+            let cutoff = calendar.date(byAdding: .day, value: -retentionDays, to: startToday) ?? startToday
+            cache.days = cachedByKey.values
+                .filter { requestedKeys.contains($0.dateKey) || (self.date(from: $0.dateKey) ?? .distantPast) >= cutoff }
+                .sorted { $0.dateKey < $1.dateKey }
+            self.save(cache)
+        }
+
+        return requestedDates.map { date in
+            let key = self.key(for: date)
+            return self.day(from: cachedByKey[key] ?? self.cachedDay(dateKey: key, counts: [:]), date: date, accounts: accounts)
+        }
+    }
+
+    private static func scanLocalActivity(
+        keys: Set<String>,
+        accounts: [CodexAccountUsage],
+        calendar: Calendar)
+        -> [String: [String: Double]]
+    {
+        var counts: [String: [String: Double]] = [:]
+        let historyURL = FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent(".codex/history.jsonl")
+        if let contents = try? String(contentsOf: historyURL, encoding: .utf8) {
+            for line in contents.split(whereSeparator: \.isNewline) {
+                guard let data = String(line).data(using: .utf8),
+                      let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                      let rawTimestamp = object["ts"] else { continue }
+                let timestamp: TimeInterval
+                if let value = rawTimestamp as? Double {
+                    timestamp = value
+                } else if let value = rawTimestamp as? Int {
+                    timestamp = TimeInterval(value)
+                } else {
+                    continue
+                }
+
+                let date = Date(timeIntervalSince1970: timestamp)
+                let key = self.key(for: calendar.startOfDay(for: date))
+                guard keys.contains(key) else { continue }
+                let accountName = self.accountName(for: date, accounts: accounts)
+                counts[key, default: [:]][accountName, default: 0] += 1
+            }
+        }
+
+        let sessionIndexURL = FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent(".codex/session_index.jsonl")
+        guard let sessionIndex = try? String(contentsOf: sessionIndexURL, encoding: .utf8) else {
+            return counts
+        }
+
+        var seenSessions = Set<String>()
+        for line in sessionIndex.split(whereSeparator: \.isNewline) {
+            guard let data = String(line).data(using: .utf8),
+                  let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                  let id = object["id"] as? String,
+                  let updatedAt = object["updated_at"] as? String,
+                  let date = self.parseDate(updatedAt) else { continue }
+            let key = self.key(for: calendar.startOfDay(for: date))
+            guard keys.contains(key), seenSessions.insert("\(key):\(id)").inserted else { continue }
+            let accountName = self.accountName(for: date, accounts: accounts)
+            counts[key, default: [:]][accountName, default: 0] += 1
+        }
+
+        return counts
+    }
+
+    private static func accountName(for date: Date, accounts: [CodexAccountUsage]) -> String {
+        let timestamp = date.timeIntervalSince1970
+        let selected = accounts
+            .compactMap { account -> (CodexAccountUsage, Double)? in
+                guard let selectedAt = account.lastSelectedAt, selectedAt <= timestamp else { return nil }
+                return (account, selectedAt)
+            }
+            .max { $0.1 < $1.1 }?
+            .0
+        return selected?.name
+            ?? accounts.first(where: \.active)?.name
+            ?? accounts.first?.name
+            ?? "codex"
+    }
+
+    private static func cachedDay(dateKey: String, counts: [String: Double]) -> CachedActivityDay {
+        CachedActivityDay(
+            dateKey: dateKey,
+            segments: counts
+                .filter { $0.value > 0 }
+                .map { CachedActivitySegment(accountName: $0.key, amount: $0.value) }
+                .sorted { $0.accountName < $1.accountName })
+    }
+
+    private static func day(from cached: CachedActivityDay, date: Date, accounts: [CodexAccountUsage]) -> UsageHistoryDay {
+        let segments = cached.segments.map { segment in
+            UsageHistorySegment(
+                accountName: segment.accountName,
+                displayName: accounts.first(where: { $0.name == segment.accountName })?.displayName ?? segment.accountName,
+                amount: segment.amount,
+                color: AccountColor.color(for: segment.accountName))
+        }
+        return UsageHistoryDay(date: date, segments: segments, total: segments.map(\.amount).reduce(0, +))
+    }
+
+    private static func load() -> CachedActivityHistory {
+        guard let data = try? Data(contentsOf: CodexProfileStore.activityHistoryURL) else { return .empty }
+        guard let cache = try? JSONDecoder().decode(CachedActivityHistory.self, from: data),
+              cache.version == CachedActivityHistory.currentVersion else { return .empty }
+        return cache
+    }
+
+    private static func save(_ cache: CachedActivityHistory) {
+        do {
+            try FileManager.default.createDirectory(
+                at: CodexProfileStore.activityHistoryURL.deletingLastPathComponent(),
+                withIntermediateDirectories: true)
+            let data = try JSONEncoder.pretty.encode(cache)
+            try data.write(to: CodexProfileStore.activityHistoryURL, options: .atomic)
+        } catch {
+            NSLog("CodexMaxx failed to save activity history: \(error.localizedDescription)")
+        }
+    }
+
+    private static func key(for date: Date) -> String {
+        let components = Calendar.current.dateComponents([.year, .month, .day], from: date)
+        return String(format: "%04d-%02d-%02d", components.year ?? 0, components.month ?? 0, components.day ?? 0)
+    }
+
+    private static func date(from key: String) -> Date? {
+        let parts = key.split(separator: "-").compactMap { Int($0) }
+        guard parts.count == 3 else { return nil }
+        return Calendar.current.date(from: DateComponents(year: parts[0], month: parts[1], day: parts[2]))
+    }
+
+    private static func parseDate(_ value: String) -> Date? {
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        if let date = formatter.date(from: value) { return date }
+        formatter.formatOptions = [.withInternetDateTime]
+        return formatter.date(from: value)
     }
 }
 
@@ -1916,6 +2124,7 @@ enum UsageHistoryStore {
 final class UsageController: ObservableObject {
     @Published private(set) var accounts: [CodexAccountUsage] = []
     @Published private(set) var usageHistory: [UsageHistorySample] = UsageHistoryStore.load()
+    @Published private(set) var activityDays: [UsageHistoryDay] = []
     @Published private(set) var updatedAt = Date()
     @Published private(set) var isRefreshing = false
     @Published private(set) var lastError: String?
@@ -1942,6 +2151,7 @@ final class UsageController: ObservableObject {
             }
             self.accounts = accounts
             self.usageHistory = UsageHistoryStore.record(accounts: accounts)
+            self.activityDays = CodexActivityStore.days(accounts: accounts)
             self.updatedAt = Date()
             self.lastError = nil
         } catch {
@@ -2205,6 +2415,9 @@ enum CodexProfileStore {
     }
     static var usageHistoryURL: URL {
         Self.managedRoot.appendingPathComponent("usage-history.json")
+    }
+    static var activityHistoryURL: URL {
+        Self.managedRoot.appendingPathComponent("activity-history.json")
     }
     private static let liveCodexHome = FileManager.default.homeDirectoryForCurrentUser
         .appendingPathComponent(".codex")
