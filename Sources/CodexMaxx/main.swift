@@ -677,7 +677,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         self.addSetting(menu, "Numbers", self.settings.showNumbers, #selector(toggleNumbers))
         self.addSetting(menu, "Show Emails", self.settings.showEmails, #selector(toggleEmails))
         menu.addItem(.separator())
-        self.addSetting(menu, "Session Menu Bar Icon", self.settings.showSessionMenuBarIcon, #selector(toggleSessionMenuBarIcon))
+        self.addSetting(menu, "Show Session Status in Menu Bar", self.settings.showSessionMenuBarIcon, #selector(toggleSessionMenuBarIcon))
         self.addSetting(menu, "Blink When No Session", self.settings.blinkSessionIconWhenIdle, #selector(toggleSessionBlinkWhenIdle))
         self.addSetting(menu, "Beep When No Session", self.settings.beepWhenIdle, #selector(toggleSessionBeepWhenIdle))
         menu.addItem(.separator())
@@ -1059,9 +1059,7 @@ struct MainWindowContent: View {
                             alignment: .leading,
                             spacing: 16)
                         {
-                            SummaryPanel(title: "Accounts", value: "\(controller.accounts.count)", detail: self.activeAccountName)
                             SummaryPanel(title: "Sessions", value: "\(controller.sessionStatus.count)", detail: controller.sessionStatus.detail)
-                            SummaryPanel(title: "Load Balancer", value: loadBalancerSettings.enabled ? "On" : "Off", detail: loadBalancerSettings.strategy.title)
                             if let combined = UsageMath.combined(controller.accounts.map(\.snapshot)) {
                                 SummaryUsagePanel(snapshot: combined)
                             }
@@ -2048,7 +2046,7 @@ struct SettingsWindowContent: View {
                 }
                 Toggle("Show numbers", isOn: $showNumbers)
                 Toggle("Show emails", isOn: $showEmails)
-                Toggle("Show session icon", isOn: $showSessionMenuBarIcon)
+                Toggle("Show session status in menu bar", isOn: $showSessionMenuBarIcon)
                 Toggle("Blink when no active session", isOn: $blinkSessionIconWhenIdle)
                 Toggle("Beep when no active session", isOn: $beepWhenIdle)
             }
