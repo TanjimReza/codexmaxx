@@ -15,6 +15,7 @@ Download the latest stable build from [releaseflow.net/kitze/codexmaxx](https://
 - Combined or active-account menu bar usage.
 - Session and weekly Codex quota display.
 - Account switching without a CLI, including click-to-switch account cards.
+- Profile deletion from account menus.
 - Main dashboard with account grid, weekly usage chart, and GitHub-style activity graph.
 - Active Codex session monitoring with session count, optional menu bar status, idle blinking, and idle beep alerts.
 - Optional Codex-only load balancing across stored profiles.
@@ -24,6 +25,28 @@ Download the latest stable build from [releaseflow.net/kitze/codexmaxx](https://
 - Text, stacked-bar, and circular menu bar display modes.
 - Local profile storage under `~/.codexmaxx`.
 - Separate Dev variant storage under `~/.codexmaxx-dev`.
+
+## Add Multiple Accounts
+
+CodexMaxx saves whatever account is currently active in the Codex CLI. To add multiple accounts, use `codex login` for each account and then save it from the CodexMaxx menu.
+
+1. Log in to the first account with the Codex CLI:
+
+   ```bash
+   codex login
+   ```
+
+2. Open CodexMaxx and choose `Add Current Account...`. Give the profile a clear name, such as `work` or `personal`.
+
+3. Log in to the next account with the Codex CLI:
+
+   ```bash
+   codex login
+   ```
+
+4. Choose `Add Current Account...` again and save this account under a different profile name.
+
+Repeat this flow for every account you want to manage. Switching copies the selected saved profile into `~/.codex`, so the Codex CLI and CodexMaxx use the same active account.
 
 ## Build
 
@@ -40,7 +63,7 @@ open CodexMaxx.app
 
 ## Privacy
 
-CodexMaxx stores copied Codex profile files in `~/.codexmaxx/profiles/codex` and backs up switched files under `~/.codexmaxx/backups`.
+CodexMaxx stores copied Codex profile files in `~/.codexmaxx/profiles/codex` and backs up switched files under `~/.codexmaxx/backups`. Deleting a profile removes its saved CodexMaxx copy and metadata, but does not delete your live `~/.codex` files.
 
 Do not commit `~/.codex`, `~/.codexmaxx`, `auth.json`, or local release credentials.
 
