@@ -1,0 +1,72 @@
+included:
+  - Sources
+
+excluded:
+  - .build
+  - .codex
+  - Vendor
+  - legacy
+
+file_length:
+  warning: 450
+  error: 500
+  ignore_comment_only_lines: true
+
+type_body_length:
+  warning: 250
+
+function_body_length:
+  warning: 50
+
+closure_body_length:
+  warning: 50
+
+cyclomatic_complexity:
+  warning: 10
+  ignores_case_statements: true
+
+function_parameter_count:
+  warning: 6
+
+nesting:
+  type_level:
+    warning: 2
+  function_level:
+    warning: 3
+
+line_length:
+  warning: 160
+  ignores_comments: true
+  ignores_urls: true
+  ignores_function_declarations: true
+
+identifier_name:
+  min_length:
+    warning: 1
+  allowed_symbols: ["_"]
+
+force_cast:
+  severity: warning
+
+force_try:
+  severity: warning
+
+large_tuple:
+  warning: 3
+
+shorthand_operator:
+  severity: warning
+
+opt_in_rules:
+  - closure_body_length
+  - file_name
+  - sorted_imports
+  - empty_count
+  - first_where
+  - contains_over_filter_count
+  - contains_over_filter_is_empty
+  - reduce_into
+  - fatal_error_message
+  - force_unwrapping
+  - implicitly_unwrapped_optional
+  - weak_delegate
